@@ -3,6 +3,11 @@
 # Format: <owner/repo> [global|project]
 # Default scope is global. Lines starting with # are ignored.
 
+payloadcms/payload      project
+vercel-labs/next-skills project
+mattpocock/skills       project
+
+# Other suggestions:
 # NETCASE/coretex global
 # laravel/boost global
 # vercel-labs/agent-skills global
