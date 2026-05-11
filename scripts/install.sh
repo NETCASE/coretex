@@ -71,7 +71,9 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   esac
 
   echo "→ $repo ($scope)"
-  npx -y skills add $scope_flag -a claude-code "$repo"
+  # NOTE: source must come BEFORE -a/--agent because -a is variadic
+  # and will swallow following positional arguments.
+  npx -y skills add "$repo" $scope_flag -a claude-code
   echo
   count=$((count + 1))
 done <"$profile_file"
