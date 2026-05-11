@@ -1,0 +1,8 @@
+# dev — software development skills
+#
+# Format: <owner/repo> [global|project]
+# Default scope is global. Lines starting with # are ignored.
+
+# NETCASE/coretex global
+# laravel/boost global
+# vercel-labs/agent-skills global

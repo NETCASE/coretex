@@ -1,0 +1,11 @@
+# system — base skills installed on every machine
+#
+# Format: <owner/repo> [global|project]
+# Default scope is global. Lines starting with # are ignored.
+
+NETCASE/coretex global
+
+# Uncomment to add upstream skills:
+# anthropics/skills global
+# mattpocock/skills global
+# vercel-labs/agent-skills global

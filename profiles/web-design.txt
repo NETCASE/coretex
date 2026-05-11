@@ -1,0 +1,6 @@
+# web-design — skills for web and UI/UX work
+#
+# Format: <owner/repo> [global|project]
+# Default scope is global. Lines starting with # are ignored.
+
+# NETCASE/coretex global

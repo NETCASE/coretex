@@ -1,0 +1,7 @@
+# thinktank — skills for ideation, planning, and structured thinking
+#
+# Format: <owner/repo> [global|project]
+# Default scope is global. Lines starting with # are ignored.
+
+# NETCASE/coretex global
+# mattpocock/skills global   # contains grill-me, zoom-out, etc. — confirm license first

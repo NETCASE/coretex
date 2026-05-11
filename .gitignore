@@ -1,0 +1,11 @@
+.DS_Store
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Local reference material — not ours to redistribute
+context/
+
+# Local Claude Code state
+.claude/
