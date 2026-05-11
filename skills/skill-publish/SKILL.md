@@ -35,7 +35,7 @@ Read `SKILL_PATH/SKILL.md`. Reject (and tell the user why) if any of these fail:
 - `name` matches `^[a-z][a-z0-9-]*$` (lowercase, hyphens, no spaces or underscores).
 - `name` equals the folder name (case-sensitive). If not, ask whether to rename folder or frontmatter.
 - `description` is a single line, ≥ 40 characters, and clearly states **when to use** (discovery requires this — descriptions like "does X" without a trigger context are too weak).
-- No file in the skill folder contains obvious secrets — grep for `BEGIN PRIVATE KEY`, `xox[bp]-`, `gh[ps]_`, `sk-`, `AKIA`, `.env` content patterns. If found, abort and surface to the user.
+- No file in the skill folder contains obvious secrets. Scan for common credential formats (cloud provider access keys, GitHub or Slack tokens, private key headers, `.env`-style assignments with non-placeholder values). Use a dedicated scanner if available (`gitleaks detect`, `trufflehog filesystem`); otherwise apply regex checks for these formats yourself. Abort if any non-test content matches.
 
 Optional checks (warn but don't block):
 
@@ -91,19 +91,18 @@ git push origin main
 
 Use `Update skill: <name>` if the skill folder already existed before this run.
 
-### 6. Verify
+### 6. Provide verification instructions (don't auto-run)
 
-Test that the install actually works:
+The skill is now in the repo. Do **not** execute a verification install yourself — output the command for the user to run, so they decide when to fetch and execute remote code:
 
 ```sh
-VERIFY=$(mktemp -d)
-cd "$VERIFY"
-npx -y skills add NETCASE/coretex
-# Confirm the new skill appears
-ls .claude/skills/ 2>/dev/null || ls skills/ 2>/dev/null
+# Verify install (run in any directory):
+cd "$(mktemp -d)" && npx skills add NETCASE/coretex -g -a claude-code
+# Then list installed skills:
+npx skills list
 ```
 
-If verification fails, do **not** delete the push — surface the failure to the user with the npx output; the issue is usually a spec violation that escaped step 1.
+If the user reports a failure: read the error output, do **not** delete the push, and surface the underlying issue. Most failures are SKILL.md spec violations that escaped step 1 (validation).
 
 ### 7. Report back
 
