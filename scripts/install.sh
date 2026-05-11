@@ -57,7 +57,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   line="$(echo "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
   [[ -z "$line" ]] && continue
 
-  read -r repo scope _ <<<"$line"
+  read -r repo scope rest <<<"$line"
   scope="${scope:-global}"
 
   scope_flag=""
@@ -70,10 +70,16 @@ while IFS= read -r line || [[ -n "$line" ]]; do
       ;;
   esac
 
-  echo "→ $repo ($scope)"
+  if [[ -n "$rest" ]]; then
+    echo "→ $repo ($scope) [$rest]"
+  else
+    echo "→ $repo ($scope)"
+  fi
   # NOTE: source must come BEFORE -a/--agent because -a is variadic
   # and will swallow following positional arguments.
-  npx -y skills add "$repo" $scope_flag -a claude-code
+  # $rest is intentionally unquoted so extra flags split into separate args.
+  # </dev/null prevents npx from consuming our profile file via stdin (kills the loop otherwise).
+  npx -y skills add "$repo" $scope_flag -a claude-code $rest </dev/null
   echo
   count=$((count + 1))
 done <"$profile_file"

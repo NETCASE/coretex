@@ -39,7 +39,13 @@ Initial profiles:
 | `web-design` | Web and UI/UX work |
 | `thinktank` | Ideation, planning, structured thinking |
 
-Edit `profiles/<name>.txt` to activate or add sources. Lines starting with `#` are ignored.
+Edit `profiles/<name>.txt` to activate or add sources. Each line is:
+
+```
+<owner/repo> [global|project] [extra-flags...]
+```
+
+Extra flags are passed straight to `npx skills add`. Most useful is `--skill <name1> <name2>` to install only specific skills from a multi-skill repo (e.g. only `skill-creator` from `anthropics/skills`'s 17 skills). Lines starting with `#` are ignored.
 
 ## Setup
 

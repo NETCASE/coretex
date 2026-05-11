@@ -1,11 +1,21 @@
 # system — base skills installed on every machine
 #
-# Format: <owner/repo> [global|project]
-# Default scope is global. Lines starting with # are ignored.
+# Format: <owner/repo> [global|project] [extra-flags...]
+#
+#   - scope: defaults to global (writes to ~/.claude/skills/)
+#   - extra-flags: passed straight to `npx skills add`. Most useful:
+#       --skill <name1> <name2>     install only specific skills from repo
+#       --full-depth                recurse even past root SKILL.md
+#
+# Lines starting with # are ignored.
 
-NETCASE/coretex global
+NETCASE/coretex     global
+anthropics/skills   global --skill skill-creator
 
-# Uncomment to add upstream skills:
-# anthropics/skills global
-# mattpocock/skills global
+# Other useful Anthropic skills (uncomment to add):
+# anthropics/skills global --skill skill-creator mcp-builder claude-api webapp-testing
+#   ^ replaces line above — one entry per repo
+
+# Other upstream sources:
+# mattpocock/skills        global
 # vercel-labs/agent-skills global
