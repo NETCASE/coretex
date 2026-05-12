@@ -172,9 +172,24 @@ fmt_table() {
   { printf '%s\n' "$formatted" | head -1; printf '%s\n' "$rule"; printf '%s\n' "$formatted" | tail -n +2; } | sed 's/^/  /'
 }
 
-# Colour the first column of a fmt_table-formatted block. NR<=2 = header + rule.
-colorize_first_column() {
-  awk -v t="$TEAL" -v r="$RESET" 'NR<=2 {print; next} { sub(/^[[:space:]]*[^[:space:]]+/, t "&" r); print }'
+# Style the NAME column of a fmt_table block: colour it teal, and blank it on
+# consecutive rows that repeat the previous row's name (so a skill with several
+# agent rows shows the name once). NR<=2 = header + rule rows, left untouched.
+style_name_column() {
+  awk -v t="$TEAL" -v r="$RESET" '
+    NR<=2 { print; prev=""; next }
+    {
+      ws = ""; line = $0
+      if (match(line, /^[[:space:]]+/)) { ws = substr(line, 1, RLENGTH); line = substr(line, RLENGTH+1) }
+      if (match(line, /^[^[:space:]]+/)) {
+        name = substr(line, 1, RLENGTH); rest = substr(line, RLENGTH+1)
+        if (name == prev) {
+          pad = ""; n = length(ws) + length(name)
+          for (i=0; i<n; i++) pad = pad " "
+          print pad rest
+        } else { prev = name; print ws t name r rest }
+      } else { print $0 }
+    }'
 }
 
 # Display-name → home-relative dir for the per-agent symlink locations.
@@ -213,7 +228,7 @@ print_global() {
                       ( if $m[.] then "~/" + $m[.] + "/skills/" + $s.name
                         else ($s.path | sub("^"+$home; "~")) end ) ] | @tsv
       end'
-  } | fmt_table | colorize_first_column
+  } | fmt_table | style_name_column
 }
 
 # Project skills, grouped by the folder that contains them.
@@ -246,7 +261,7 @@ print_folders() {
     {
       printf 'NAME\tAGENTS\tPATH\n'
       printf '%s\n' "$rows" | awk -F'\t' -v r="$root" 'BEGIN{OFS="\t"} $1==r { print $2,$3,$4 }'
-    } | fmt_table | colorize_first_column
+    } | fmt_table | style_name_column
   done <<<"$roots"
 }
 
@@ -302,7 +317,7 @@ cmd_detect_agents() {
   if [[ -z "$rows" ]]; then
     echo "  $DIM(none detected)$RESET"
   else
-    { printf 'AGENT\tDIRECTORY\n'; printf '%s' "$rows"; } | fmt_table | colorize_first_column
+    { printf 'AGENT\tDIRECTORY\n'; printf '%s' "$rows"; } | fmt_table | style_name_column
   fi
 
   echo
