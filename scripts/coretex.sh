@@ -27,7 +27,7 @@ else
   BOLD='' DIM='' TEAL='' RESET=''
 fi
 
-RULE_W=58
+RULE_W=64
 _hr() {  # dim horizontal rule, 2-space indent; arg = width (default $RULE_W)
   local w="${1:-$RULE_W}"
   printf '  %s%s%s\n' "$DIM" "$(printf '%*s' "$w" '' | tr ' ' '─')" "$RESET"
@@ -66,12 +66,16 @@ total_skill_size() {  # sum of skill dirs that exist, humanised
   human_size "$total"
 }
 
-print_header() {
-  local banner
+print_header() {  # arg = command name
+  local cmd="$1" banner
   banner="$(printf '%s\n' "$COTX_BANNER" | sed 's/^/  /')"
   echo
   _hr
+  echo
   printf '%s%s%s\n' "$TEAL" "$banner" "$RESET"
+  echo
+  _hr
+  printf '  %scommand:%s %s%s%s\n' "$DIM" "$RESET" "$BOLD" "$cmd" "$RESET"
   _hr
   echo
 }
@@ -131,7 +135,7 @@ pick_profile() {
 }
 
 cmd_install() {
-  print_header
+  print_header "install"
   local profile="${1:-}"
   if [[ -z "$profile" ]]; then
     profile="$(pick_profile)"
@@ -158,7 +162,8 @@ fmt_table() {
   local formatted maxw rule
   formatted="$(column -t -s$'\t')"
   [[ -z "$formatted" ]] && { echo "  (none)"; return; }
-  maxw="$(printf '%s\n' "$formatted" | awk '{ if (length > m) m = length } END { print m+0 }')"
+  # Rule spans the widest row, but never narrower than the header/footer rule.
+  maxw="$(printf '%s\n' "$formatted" | awk -v min="$RULE_W" '{ if (length > m) m = length } END { print (m > min ? m : min) + 0 }')"
   rule="$(printf '%*s' "$maxw" '' | tr ' ' '─')"
   { printf '%s\n' "$formatted" | head -1; printf '%s\n' "$rule"; printf '%s\n' "$formatted" | tail -n +2; } | sed 's/^/  /'
 }
@@ -188,16 +193,18 @@ print_project() {
   {
     printf 'NAME\tPROJECT\tPATH\tAGENTS\n'
     echo "$json" | jq -r '
-      .[] | [ .name,
-              ( try ( .path | capture("(?<r>.*)/(?:\\.claude/)?skills/[^/]+$").r | split("/") | last ) catch "?" ),
-              (.path | sub("^"+env.HOME; "~")),
-              ( if ((.agents // []) | length) == 0 then "—" else (.agents | join(", ")) end ) ] | @tsv'
+      .[] |
+      ( try ( .path | capture("(?<root>.*?)/(?<rel>(?:\\.claude/)?skills/[^/]+)$") ) catch null ) as $m |
+      [ .name,
+        ( if $m then ($m.root | split("/") | last) else "?" end ),
+        ( if $m then $m.rel else (.path | sub("^"+env.HOME; "~")) end ),
+        ( if ((.agents // []) | length) == 0 then "—" else (.agents | join(", ")) end ) ] | @tsv'
   } | fmt_table | colorize_first_column
 }
 
 cmd_status() {
   need_jq
-  print_header
+  print_header "status"
   printf '  %sGLOBAL%s  %s~/.agents/skills/%s\n\n' "$BOLD" "$RESET" "$DIM" "$RESET"
   print_global
   echo
@@ -208,14 +215,14 @@ cmd_status() {
 
 # ── placeholders ─────────────────────────────────────────────────
 cmd_update() {
-  print_header
-  printf '  %supdate — not yet implemented%s\n' "$DIM" "$RESET"
+  print_header "update"
+  printf '  %snot yet implemented%s\n' "$DIM" "$RESET"
   print_footer
 }
 
 cmd_remove() {
-  print_header
-  printf '  %sremove — not yet implemented%s\n' "$DIM" "$RESET"
+  print_header "remove"
+  printf '  %snot yet implemented%s\n' "$DIM" "$RESET"
   print_footer
 }
 
