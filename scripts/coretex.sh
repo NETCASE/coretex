@@ -177,16 +177,42 @@ colorize_first_column() {
   awk -v t="$TEAL" -v r="$RESET" 'NR<=2 {print; next} { sub(/^[[:space:]]*[^[:space:]]+/, t "&" r); print }'
 }
 
+# Display-name → home-relative dir for the per-agent symlink locations.
+AGENT_LINK_DIRS='{
+  "Claude Code": ".claude",
+  "Qwen Code": ".qwen",
+  "Continue": ".continue",
+  "Cursor": ".cursor",
+  "Gemini CLI": ".gemini",
+  "Codex": ".codex",
+  "Windsurf": ".windsurf",
+  "OpenCode": ".config/opencode",
+  "Goose": ".config/goose",
+  "GitHub Copilot": ".config/github-copilot",
+  "Amp": ".amp",
+  "Cline": ".cline",
+  "Roo Code": ".roo",
+  "Kilo Code": ".kilo",
+  "Junie": ".junie",
+  "Kiro": ".kiro"
+}'
+
 print_global() {
   local json
   json="$(npx -y skills list --global --json 2>/dev/null || echo '[]')"
   if [[ "$(echo "$json" | jq 'length')" -eq 0 ]]; then echo "  $DIM(none)$RESET"; return; fi
   {
-    printf 'NAME\tAGENTS\tPATH\n'
-    echo "$json" | jq -r '
-      .[] | [ .name,
-              ( if ((.agents // []) | length) == 0 then "—" else (.agents | join(", ")) end ),
-              (.path | sub("^"+env.HOME; "~")) ] | @tsv'
+    printf 'NAME\tAGENT\tPATH\n'
+    # One row per (skill, agent). PATH is the agent's symlink path; falls back to
+    # the canonical store path when the agent's dir isn't in AGENT_LINK_DIRS.
+    echo "$json" | jq -r --argjson m "$AGENT_LINK_DIRS" --arg home "$HOME" '
+      .[] | . as $s | ($s.agents // []) as $ags |
+      if ($ags | length) == 0
+      then [ $s.name, "—", ($s.path | sub("^"+$home; "~")) ] | @tsv
+      else $ags[] | [ $s.name, .,
+                      ( if $m[.] then "~/" + $m[.] + "/skills/" + $s.name
+                        else ($s.path | sub("^"+$home; "~")) end ) ] | @tsv
+      end'
   } | fmt_table | colorize_first_column
 }
 
