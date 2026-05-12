@@ -33,10 +33,13 @@ _hr() {  # dim horizontal rule, 2-space indent; arg = width (default $RULE_W)
   printf '  %s%s%s\n' "$DIM" "$(printf '%*s' "$w" '' | tr ' ' '─')" "$RESET"
 }
 
-# ASCII-art wordmark — box-drawing "coretex" (no shell-special chars).
-COTX_BANNER="┌─┐┌─┐┬─┐┌─┐┌┬┐┌─┐─┐ ┬
-│  │ │├┬┘├┤  │ ├┤ ┌┴┬┘
-└─┘└─┘┴└─└─┘ ┴ └─┘┴ └─"
+# ASCII-art wordmark — figlet "ANSI Shadow", "CORETEX" (no shell-special chars).
+COTX_BANNER=" ██████╗ ██████╗ ██████╗ ███████╗████████╗███████╗██╗  ██╗
+██╔════╝██╔═══██╗██╔══██╗██╔════╝╚══██╔══╝██╔════╝╚██╗██╔╝
+██║     ██║   ██║██████╔╝█████╗     ██║   █████╗   ╚███╔╝
+██║     ██║   ██║██╔══██╗██╔══╝     ██║   ██╔══╝   ██╔██╗
+╚██████╗╚██████╔╝██║  ██║███████╗   ██║   ███████╗██╔╝ ██╗
+ ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝"
 
 coretex_version() {  # <branch>@<short-sha>, or "?" if not a git repo
   local branch sha
@@ -63,15 +66,12 @@ total_skill_size() {  # sum of skill dirs that exist, humanised
   human_size "$total"
 }
 
-print_header() {  # arg = component name
-  local comp="$1" banner
-  comp="$(printf '%s' "${comp:0:1}" | tr '[:lower:]' '[:upper:]')${comp:1}"
+print_header() {
+  local banner
   banner="$(printf '%s\n' "$COTX_BANNER" | sed 's/^/  /')"
   echo
   _hr
   printf '%s%s%s\n' "$TEAL" "$banner" "$RESET"
-  echo
-  printf '  %s%s%s\n' "$BOLD" "$comp" "$RESET"
   _hr
   echo
 }
@@ -131,7 +131,7 @@ pick_profile() {
 }
 
 cmd_install() {
-  print_header "install"
+  print_header
   local profile="${1:-}"
   if [[ -z "$profile" ]]; then
     profile="$(pick_profile)"
@@ -197,7 +197,7 @@ print_project() {
 
 cmd_status() {
   need_jq
-  print_header "status"
+  print_header
   printf '  %sGLOBAL%s  %s~/.agents/skills/%s\n\n' "$BOLD" "$RESET" "$DIM" "$RESET"
   print_global
   echo
@@ -208,14 +208,14 @@ cmd_status() {
 
 # ── placeholders ─────────────────────────────────────────────────
 cmd_update() {
-  print_header "update"
-  printf '  %snot yet implemented%s\n' "$DIM" "$RESET"
+  print_header
+  printf '  %supdate — not yet implemented%s\n' "$DIM" "$RESET"
   print_footer
 }
 
 cmd_remove() {
-  print_header "remove"
-  printf '  %snot yet implemented%s\n' "$DIM" "$RESET"
+  print_header
+  printf '  %sremove — not yet implemented%s\n' "$DIM" "$RESET"
   print_footer
 }
 
