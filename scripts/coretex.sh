@@ -97,19 +97,21 @@ list_profiles() {
 }
 
 usage() {
+  print_header "help"
   cat <<EOF
-coretex — NETCASE skills CLI
+  coretex — NETCASE skills CLI
 
-  coretex install [<profile>]   install all sources from profiles/<profile>.txt
-                                (no <profile> → choose from a list)
-  coretex status                list installed skills (global, then project)
-  coretex detect-agents         show which agents auto-detect would target
-  coretex update                update all installed skills        (coming soon)
-  coretex remove                remove installed skills            (coming soon)
-  coretex --help
+    coretex install [<profile>]   install all sources from profiles/<profile>.txt
+                                  (no <profile> → choose from a list)
+    coretex status                list installed skills (global, then folder)
+    coretex detect-agents         show which agents auto-detect would target
+    coretex update                update all installed skills        (coming soon)
+    coretex remove                remove installed skills            (coming soon)
+    coretex --help
 
-Available profiles: $(list_profiles | paste -sd' ' -)
+  Available profiles: $(list_profiles | paste -sd' ' -)
 EOF
+  print_footer
 }
 
 # ── install ──────────────────────────────────────────────────────
