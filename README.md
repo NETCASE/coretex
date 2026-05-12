@@ -76,10 +76,10 @@ coretex install system
 ### `coretex` commands
 
 ```
-coretex install <profile>   install all sources from profiles/<profile>.txt
-coretex status              list installed skills — global first, then project
-                            (with path and project name)
-coretex <profile>           shorthand for `coretex install <profile>`
+coretex install [<profile>]   install all sources from profiles/<profile>.txt
+                              (no <profile> → numbered picker)
+coretex status                list installed skills — global first, then project
+                              (with path, agents, and project name)
 coretex --help
 ```
 

@@ -2,9 +2,9 @@
 # coretex — CLI for the NETCASE skills repo.
 #
 # Usage:
-#   coretex install <profile>   install all sources listed in profiles/<profile>.txt
-#   coretex status              list installed skills: global first, then project
-#   coretex <profile>           shorthand for `coretex install <profile>`
+#   coretex install [<profile>]   install all sources in profiles/<profile>.txt
+#                                 (no argument → pick from a list)
+#   coretex status                list installed skills: global, then project
 #   coretex --help
 #
 # `install` is a thin wrapper around scripts/install.sh.
@@ -16,25 +16,61 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_SH="$SCRIPT_DIR/install.sh"
 PROFILES_DIR="$(dirname "$SCRIPT_DIR")/profiles"
 
-profiles_list() {
-  ls "$PROFILES_DIR"/*.txt 2>/dev/null | xargs -n1 basename 2>/dev/null | sed 's/\.txt$//' | paste -sd' ' -
+list_profiles() {
+  ls "$PROFILES_DIR"/*.txt 2>/dev/null | xargs -n1 basename 2>/dev/null | sed 's/\.txt$//'
 }
 
 usage() {
   cat <<EOF
 coretex — NETCASE skills CLI
 
-  coretex install <profile>   install all sources from profiles/<profile>.txt
-  coretex status              list installed skills (global, then project)
-  coretex <profile>           shorthand for: coretex install <profile>
+  coretex install [<profile>]   install all sources from profiles/<profile>.txt
+                                (no <profile> → choose from a list)
+  coretex status                list installed skills (global, then project)
   coretex --help
 
-Available profiles: $(profiles_list)
+Available profiles: $(list_profiles | paste -sd' ' -)
 EOF
 }
 
+# ── install ──────────────────────────────────────────────────────
+pick_profile() {
+  # Prints the chosen profile name to stdout; menu + prompt go to stderr.
+  local profiles=() p i=1 choice
+  while IFS= read -r p; do profiles+=("$p"); done < <(list_profiles)
+  if [[ ${#profiles[@]} -eq 0 ]]; then
+    echo "No profiles found in $PROFILES_DIR" >&2
+    exit 1
+  fi
+  echo "Available profiles:" >&2
+  for p in "${profiles[@]}"; do
+    printf "  %d) %s\n" "$i" "$p" >&2
+    i=$((i + 1))
+  done
+  printf "Pick a profile [1-%d] (q to quit): " "${#profiles[@]}" >&2
+  read -r choice || exit 0
+  [[ "$choice" =~ ^[qQ]$ || -z "$choice" ]] && exit 0
+  if ! [[ "$choice" =~ ^[0-9]+$ ]] || (( choice < 1 || choice > ${#profiles[@]} )); then
+    echo "Invalid choice: $choice" >&2
+    exit 1
+  fi
+  echo "${profiles[$((choice - 1))]}"
+}
+
+cmd_install() {
+  local profile="${1:-}"
+  if [[ -z "$profile" ]]; then
+    profile="$(pick_profile)"
+  fi
+  if [[ ! -f "$PROFILES_DIR/$profile.txt" ]]; then
+    echo "no such profile: $profile  (have: $(list_profiles | paste -sd' ' -))" >&2
+    exit 1
+  fi
+  bash "$INSTALL_SH" "$profile"
+}
+
 # ── status ───────────────────────────────────────────────────────
-_need_jq() {
+need_jq() {
   command -v jq >/dev/null 2>&1 || {
     echo "coretex status needs 'jq' — install with: brew install jq" >&2
     exit 1
@@ -72,7 +108,7 @@ print_project() {
 }
 
 cmd_status() {
-  _need_jq
+  need_jq
   echo "Global skills  (canonical store + per-agent symlinks)"
   print_global
   echo
@@ -82,22 +118,12 @@ cmd_status() {
 
 # ── dispatch ─────────────────────────────────────────────────────
 case "${1:-}" in
-  ""|--help|-h)
-    usage ;;
-  install)
-    shift
-    [[ -n "${1:-}" ]] || { echo "usage: coretex install <profile>" >&2; exit 1; }
-    [[ -f "$PROFILES_DIR/$1.txt" ]] || { echo "no such profile: $1  (have: $(profiles_list))" >&2; exit 1; }
-    bash "$INSTALL_SH" "$1" ;;
-  status)
-    cmd_status ;;
+  install)       shift; cmd_install "${1:-}" ;;
+  status)        cmd_status ;;
+  ""|--help|-h)  usage ;;
   *)
-    # Back-compat: bare profile name → install it.
-    if [[ -f "$PROFILES_DIR/$1.txt" ]]; then
-      bash "$INSTALL_SH" "$1"
-    else
-      echo "unknown command or profile: $1" >&2
-      usage >&2
-      exit 1
-    fi ;;
+    echo "unknown command: $1" >&2
+    echo >&2
+    usage >&2
+    exit 1 ;;
 esac
