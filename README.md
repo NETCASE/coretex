@@ -65,15 +65,25 @@ Extra flags are passed straight to `npx skills add`. Most useful is `--skill <na
 # 1. Clone the repo somewhere persistent
 gh repo clone NETCASE/coretex ~/Documents/NETCASE/Code/coretex
 
-# 2. Install the system profile (global skills)
-bash ~/Documents/NETCASE/Code/coretex/scripts/install.sh system
-
-# 3. Optional alias for convenience
-echo 'alias coretex="bash ~/Documents/NETCASE/Code/coretex/scripts/install.sh"' >> ~/.zshrc
+# 2. Alias
+echo 'alias coretex="bash ~/Documents/NETCASE/Code/coretex/scripts/coretex.sh"' >> ~/.zshrc
 source ~/.zshrc        # or open a new terminal
+
+# 3. Install the system profile (global skills)
+coretex install system
 ```
 
-Then `coretex system` ≡ `bash ~/Documents/NETCASE/Code/coretex/scripts/install.sh system`.
+### `coretex` commands
+
+```
+coretex install <profile>   install all sources from profiles/<profile>.txt
+coretex status              list installed skills — global first, then project
+                            (with path and project name)
+coretex <profile>           shorthand for `coretex install <profile>`
+coretex --help
+```
+
+`coretex.sh` is a thin dispatcher: `install` wraps `scripts/install.sh`; `status` reads `npx skills list --json` (needs `jq`, preinstalled on macOS).
 
 ### Per project (project-scoped skills)
 
@@ -81,10 +91,10 @@ For each new project you start working on:
 
 ```sh
 cd ~/Code/my-new-payload-project
-coretex dev          # installs project-scoped sources from profiles/dev.txt into ./.claude/skills/
+coretex install dev    # installs project-scoped sources from profiles/dev.txt into ./.claude/skills/
 ```
 
-Note: `install.sh` for **project-scoped** entries uses your **current working directory** as the target. Always `cd` into the project first.
+Note: for **project-scoped** entries the target is your **current working directory**, so `cd` into the project first.
 
 ### Updating
 
@@ -167,7 +177,8 @@ coretex/
 ├── skills/           # published skills (one folder per skill)
 ├── profiles/         # installable bundles: system.txt, dev.txt, web-design.txt, thinktank.txt
 ├── scripts/
-│   └── install.sh    # bash scripts/install.sh <profile>
+│   ├── coretex.sh    # CLI dispatcher — the `coretex` alias points here (install / status)
+│   └── install.sh    # the actual installer: bash scripts/install.sh <profile>
 └── README.md
 ```
 
