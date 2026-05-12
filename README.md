@@ -80,8 +80,12 @@ coretex install [<profile>]   install all sources from profiles/<profile>.txt
                               (no <profile> → numbered picker)
 coretex status                list installed skills — global first, then project
                               (with path, agents, and project name)
+coretex update                update all installed skills        (coming soon)
+coretex remove                remove installed skills            (coming soon)
 coretex --help
 ```
+
+Every command prints a `CoreTex · <command>` header and a footer with the repo version (`<branch>@<sha>`), total skill size, and date. Colours follow `NO_COLOR` / non-TTY conventions.
 
 `coretex.sh` is a thin dispatcher: `install` wraps `scripts/install.sh`; `status` reads `npx skills list --json` (needs `jq`, preinstalled on macOS).
 
