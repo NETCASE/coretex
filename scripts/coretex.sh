@@ -27,10 +27,16 @@ else
   BOLD='' DIM='' TEAL='' RESET=''
 fi
 
-_hr() {  # dim horizontal rule, 2-space indent; arg = width (default 56)
-  local w="${1:-56}"
+RULE_W=58
+_hr() {  # dim horizontal rule, 2-space indent; arg = width (default $RULE_W)
+  local w="${1:-$RULE_W}"
   printf '  %s%s%s\n' "$DIM" "$(printf '%*s' "$w" '' | tr ' ' '─')" "$RESET"
 }
+
+# ASCII-art wordmark — box-drawing "coretex" (no shell-special chars).
+COTX_BANNER="┌─┐┌─┐┬─┐┌─┐┌┬┐┌─┐─┐ ┬
+│  │ │├┬┘├┤  │ ├┤ ┌┴┬┘
+└─┘└─┘┴└─└─┘ ┴ └─┘┴ └─"
 
 coretex_version() {  # <branch>@<short-sha>, or "?" if not a git repo
   local branch sha
@@ -58,14 +64,26 @@ total_skill_size() {  # sum of skill dirs that exist, humanised
 }
 
 print_header() {  # arg = component name
-  printf '  %s%sCoreTex%s %s·%s %s%s%s\n' "$BOLD" "$TEAL" "$RESET" "$DIM" "$RESET" "$TEAL" "$1" "$RESET"
+  local comp="$1" banner
+  comp="$(printf '%s' "${comp:0:1}" | tr '[:lower:]' '[:upper:]')${comp:1}"
+  banner="$(printf '%s\n' "$COTX_BANNER" | sed 's/^/  /')"
+  echo
   _hr
+  printf '%s%s%s\n' "$TEAL" "$banner" "$RESET"
+  echo
+  printf '  %s%s%s\n' "$BOLD" "$comp" "$RESET"
+  _hr
+  echo
 }
 
 print_footer() {
+  echo
   _hr
   printf '  %scoretex%s %s· %s · %s · %s%s\n' \
     "$TEAL" "$RESET" "$DIM" "$(coretex_version)" "$(total_skill_size)" "$(date +%Y-%m-%d)" "$RESET"
+  _hr
+  echo
+  echo
 }
 
 # ── shared helpers ───────────────────────────────────────────────
