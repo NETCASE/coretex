@@ -28,19 +28,22 @@ else
   BOLD='' DIM='' TEAL='' RESET=''
 fi
 
-RULE_W=64
+RULE_W=76
 _hr() {  # dim horizontal rule, 2-space indent; arg = width (default $RULE_W)
   local w="${1:-$RULE_W}"
   printf '  %s%s%s\n' "$DIM" "$(printf '%*s' "$w" '' | tr ' ' '─')" "$RESET"
 }
 
-# ASCII-art wordmark — figlet "ANSI Shadow", "CORETEX" (no shell-special chars).
-COTX_BANNER=" ██████╗ ██████╗ ██████╗ ███████╗████████╗███████╗██╗  ██╗
-██╔════╝██╔═══██╗██╔══██╗██╔════╝╚══██╔══╝██╔════╝╚██╗██╔╝
-██║     ██║   ██║██████╔╝█████╗     ██║   █████╗   ╚███╔╝
-██║     ██║   ██║██╔══██╗██╔══╝     ██║   ██╔══╝   ██╔██╗
-╚██████╗╚██████╔╝██║  ██║███████╗   ██║   ███████╗██╔╝ ██╗
- ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝"
+# ASCII-art wordmark — figlet "Big", "CoreTex" (mixed case). Quoted heredoc → all literal.
+read -r -d '' COTX_BANNER <<'BANNER' || true
+  _____                _______
+ / ____|              |__   __|
+| |       ___   _ __   ___    | |   ___ __   __
+| |      / _ \ | '__| / _ \   | |  / _ \\ \ / /
+| |____ | (_) || |   |  __/   | | |  __/ \ V /
+ \_____| \___/ |_|    \___|   |_|  \___|  \_/
+BANNER
+COTX_BANNER="${COTX_BANNER%$'\n'}"
 
 coretex_version() {  # <branch>@<short-sha>, or "?" if not a git repo
   local branch sha
@@ -180,38 +183,56 @@ print_global() {
   json="$(npx -y skills list --global --json 2>/dev/null || echo '[]')"
   if [[ "$(echo "$json" | jq 'length')" -eq 0 ]]; then echo "  $DIM(none)$RESET"; return; fi
   {
-    printf 'NAME\tPATH\tAGENTS\n'
+    printf 'NAME\tAGENTS\tPATH\n'
     echo "$json" | jq -r '
       .[] | [ .name,
-              (.path | sub("^"+env.HOME; "~")),
-              ( if ((.agents // []) | length) == 0 then "—" else (.agents | join(", ")) end ) ] | @tsv'
+              ( if ((.agents // []) | length) == 0 then "—" else (.agents | join(", ")) end ),
+              (.path | sub("^"+env.HOME; "~")) ] | @tsv'
   } | fmt_table | colorize_first_column
 }
 
-print_project() {
-  local json
+# Project skills, grouped by the folder that contains them.
+# Excludes the canonical store (~/.agents/skills/) and per-agent dirs (~/.<agent>/skills/),
+# which belong to the "Globally installed" section.
+print_folders() {
+  local json rows
   json="$(npx -y skills list --json 2>/dev/null || echo '[]')"
-  if [[ "$(echo "$json" | jq 'length')" -eq 0 ]]; then echo "  $DIM(none)$RESET"; return; fi
-  {
-    printf 'NAME\tPROJECT\tPATH\tAGENTS\n'
-    echo "$json" | jq -r '
-      .[] |
-      ( try ( .path | capture("(?<root>.*?)/(?<rel>(?:\\.claude/)?skills/[^/]+)$") ) catch null ) as $m |
-      [ .name,
-        ( if $m then ($m.root | split("/") | last) else "?" end ),
-        ( if $m then $m.rel else (.path | sub("^"+env.HOME; "~")) end ),
-        ( if ((.agents // []) | length) == 0 then "—" else (.agents | join(", ")) end ) ] | @tsv'
-  } | fmt_table | colorize_first_column
+  rows="$(echo "$json" | jq -r --arg home "$HOME" '
+    .[]
+    | (.path | ltrimstr($home + "/")) as $rest
+    | select(($rest | test("^\\.[^/]+/skills/")) | not)         # drop ~/.<agent>/skills/ installs
+    | select(.path | test("/(?:\\.claude/)?skills/[^/]+$"))
+    | (.path | capture("(?<root>.*?)/(?<rel>(?:\\.claude/)?skills/[^/]+)$")) as $m
+    | [ $m.root,
+        .name,
+        ( if ((.agents // []) | length) == 0 then "—" else (.agents | join(", ")) end ),
+        $m.rel ] | @tsv' 2>/dev/null)"
+  if [[ -z "$rows" ]]; then echo "  $DIM(none)$RESET"; return; fi
+
+  local roots root first=1 short name
+  roots="$(printf '%s\n' "$rows" | cut -f1 | sort -u)"
+  while IFS= read -r root; do
+    [[ -z "$root" ]] && continue
+    [[ $first -eq 0 ]] && echo
+    first=0
+    short="${root/#$HOME/~}"
+    name="$(basename "$root")"
+    printf '  %s▸%s %s%s%s  %s%s%s\n\n' "$TEAL" "$RESET" "$BOLD" "$name" "$RESET" "$DIM" "$short" "$RESET"
+    {
+      printf 'NAME\tAGENTS\tPATH\n'
+      printf '%s\n' "$rows" | awk -F'\t' -v r="$root" 'BEGIN{OFS="\t"} $1==r { print $2,$3,$4 }'
+    } | fmt_table | colorize_first_column
+  done <<<"$roots"
 }
 
 cmd_status() {
   need_jq
   print_header "status"
-  printf '  %sGLOBAL%s  %s~/.agents/skills/%s\n\n' "$BOLD" "$RESET" "$DIM" "$RESET"
+  printf '  %sGlobally installed skills%s  %s~/.agents/skills/%s\n\n' "$BOLD" "$RESET" "$DIM" "$RESET"
   print_global
   echo
-  printf '  %sPROJECT%s  %s%s%s\n\n' "$BOLD" "$RESET" "$DIM" "$(pwd | sed "s|^$HOME|~|")" "$RESET"
-  print_project
+  printf '  %sFolder-local skills%s\n\n' "$BOLD" "$RESET"
+  print_folders
   print_footer
 }
 
