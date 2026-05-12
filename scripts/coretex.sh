@@ -5,6 +5,7 @@
 #   coretex install [<profile>]   install all sources in profiles/<profile>.txt
 #                                 (no argument → pick from a list)
 #   coretex status                list installed skills: global, then project
+#   coretex detect-agents         agents auto-detect would target
 #   coretex update                update all installed skills   (coming soon)
 #   coretex remove                remove installed skills        (coming soon)
 #   coretex --help
@@ -102,6 +103,7 @@ coretex — NETCASE skills CLI
   coretex install [<profile>]   install all sources from profiles/<profile>.txt
                                 (no <profile> → choose from a list)
   coretex status                list installed skills (global, then project)
+  coretex detect-agents         show which agents auto-detect would target
   coretex update                update all installed skills        (coming soon)
   coretex remove                remove installed skills            (coming soon)
   coretex --help
@@ -213,6 +215,58 @@ cmd_status() {
   print_footer
 }
 
+# ── detect-agents ────────────────────────────────────────────────
+# Known agent-id → home-relative directory. skills.sh auto-detects an agent
+# when its directory exists; this map mirrors that for the common ones.
+AGENT_DIRS="claude-code:.claude
+qwen-code:.qwen
+continue:.continue
+cursor:.cursor
+gemini-cli:.gemini
+codex:.codex
+windsurf:.windsurf
+github-copilot:.config/github-copilot
+opencode:.config/opencode
+goose:.config/goose
+amp:.amp
+cline:.cline
+roo:.roo
+kilo:.kilo
+kode:.kode
+codebuddy:.codebuddy
+trae:.trae
+warp:.warp
+junie:.junie
+firebender:.firebender
+aider-desk:.aider-desk
+crush:.crush
+mux:.mux
+openhands:.openhands
+kimi-cli:.kimi"
+
+cmd_detect_agents() {
+  print_header "detect-agents"
+  printf '  %sAgents whose directory exists under your home — `coretex install` targets all of these:%s\n\n' "$DIM" "$RESET"
+
+  local rows="" id dir
+  while IFS=: read -r id dir; do
+    [[ -d "$HOME/$dir" ]] && rows+="$id"$'\t'"~/$dir"$'\n'
+  done <<<"$AGENT_DIRS"
+
+  if [[ -z "$rows" ]]; then
+    echo "  $DIM(none detected)$RESET"
+  else
+    { printf 'AGENT\tDIRECTORY\n'; printf '%s' "$rows"; } | fmt_table | colorize_first_column
+  fi
+
+  echo
+  printf '  %sNote: this mirrors the skills.sh directory-presence heuristic. A few agents are\n' "$DIM"
+  printf '  detected via editor plugins or other markers this scan does not check (e.g. some\n'
+  printf '  GitHub Copilot setups) — those still get installed by `coretex install`. To target\n'
+  printf '  a specific agent only:  npx skills add <repo> -a <agent-id>%s\n' "$RESET"
+  print_footer
+}
+
 # ── placeholders ─────────────────────────────────────────────────
 cmd_update() {
   print_header "update"
@@ -228,11 +282,12 @@ cmd_remove() {
 
 # ── dispatch ─────────────────────────────────────────────────────
 case "${1:-}" in
-  install)       shift; cmd_install "${1:-}" ;;
-  status)        cmd_status ;;
-  update)        cmd_update ;;
-  remove)        cmd_remove ;;
-  ""|--help|-h)  usage ;;
+  install)        shift; cmd_install "${1:-}" ;;
+  status)         cmd_status ;;
+  detect-agents)  cmd_detect_agents ;;
+  update)         cmd_update ;;
+  remove)         cmd_remove ;;
+  ""|--help|-h)   usage ;;
   *)
     echo "unknown command: $1" >&2
     echo >&2
