@@ -77,42 +77,52 @@ need_jq() {
   }
 }
 
+# Read TSV from stdin (first line = header), print an indented, aligned
+# table with a rule under the header spanning the widest row.
+fmt_table() {
+  local formatted maxw rule
+  formatted="$(column -t -s$'\t')"
+  [[ -z "$formatted" ]] && { echo "  (none)"; return; }
+  maxw="$(printf '%s\n' "$formatted" | awk '{ if (length > m) m = length } END { print m+0 }')"
+  rule="$(printf '%*s' "$maxw" '' | tr ' ' '─')"
+  { printf '%s\n' "$formatted" | head -1; printf '%s\n' "$rule"; printf '%s\n' "$formatted" | tail -n +2; } | sed 's/^/  /'
+}
+
 print_global() {
   local json
   json="$(npx -y skills list --global --json 2>/dev/null || echo '[]')"
   if [[ "$(echo "$json" | jq 'length')" -eq 0 ]]; then echo "  (none)"; return; fi
-  echo "$json" | jq -r '
-    .[] | [ .name,
-            (.path | sub("^"+env.HOME; "~")),
-            ((.agents // []) | join(", ")) ] | @tsv
-  ' | while IFS=$'\t' read -r name path agents; do
-    printf "  %-24s %s\n" "$name" "$path"
-    [[ -n "$agents" ]] && printf "  %-24s   agents: %s\n" "" "$agents"
-  done
+  {
+    printf 'NAME\tPATH\tAGENTS\n'
+    echo "$json" | jq -r '
+      .[] | [ .name,
+              (.path | sub("^"+env.HOME; "~")),
+              ( if ((.agents // []) | length) == 0 then "—" else (.agents | join(", ")) end ) ] | @tsv'
+  } | fmt_table
 }
 
 print_project() {
   local json
   json="$(npx -y skills list --json 2>/dev/null || echo '[]')"
   if [[ "$(echo "$json" | jq 'length')" -eq 0 ]]; then echo "  (none)"; return; fi
-  echo "$json" | jq -r '
-    .[] | [ .name,
-            (.path | sub("^"+env.HOME; "~")),
-            ( try ( .path | capture("(?<r>.*)/(?:\\.claude/)?skills/[^/]+$").r | split("/") | last )
-              catch "?" ),
-            ((.agents // []) | join(", ")) ] | @tsv
-  ' | while IFS=$'\t' read -r name path proj agents; do
-    printf "  %-24s %s\n" "$name" "$path"
-    printf "  %-24s   project: %s%s\n" "" "${proj:-?}" "${agents:+ | agents: $agents}"
-  done
+  {
+    printf 'NAME\tPROJECT\tPATH\tAGENTS\n'
+    echo "$json" | jq -r '
+      .[] | [ .name,
+              ( try ( .path | capture("(?<r>.*)/(?:\\.claude/)?skills/[^/]+$").r | split("/") | last ) catch "?" ),
+              (.path | sub("^"+env.HOME; "~")),
+              ( if ((.agents // []) | length) == 0 then "—" else (.agents | join(", ")) end ) ] | @tsv'
+  } | fmt_table
 }
 
 cmd_status() {
   need_jq
-  echo "Global skills  (canonical store + per-agent symlinks)"
+  echo "GLOBAL SKILLS  (~/.agents/skills/ + per-agent symlinks)"
+  echo
   print_global
   echo
-  echo "Project skills  (cwd: $(pwd | sed "s|^$HOME|~|"))"
+  echo "PROJECT SKILLS  (cwd: $(pwd | sed "s|^$HOME|~|"))"
+  echo
   print_project
 }
 
