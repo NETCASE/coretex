@@ -45,8 +45,18 @@ if ! command -v npx >/dev/null 2>&1; then
   exit 1
 fi
 
+# Optional agent override via env var (comma-separated).
+# Default: pass nothing → `npx skills add` auto-detects every installed agent
+# (~/.claude, ~/.qwen, ~/.continue, …) and targets all of them.
+agent_args=()
+if [[ -n "${CORETEX_AGENTS:-}" ]]; then
+  IFS=',' read -ra _agents <<<"$CORETEX_AGENTS"
+  agent_args=(-a "${_agents[@]}")
+fi
+
 echo "Installing skills from profile: $profile"
 echo "Source: $profile_file"
+[[ ${#agent_args[@]} -gt 0 ]] && echo "Agents: ${_agents[*]}" || echo "Agents: auto-detect"
 echo
 
 count=0
@@ -79,7 +89,8 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   # and will swallow following positional arguments.
   # $rest is intentionally unquoted so extra flags split into separate args.
   # </dev/null prevents npx from consuming our profile file via stdin (kills the loop otherwise).
-  npx -y skills add "$repo" $scope_flag -a claude-code $rest </dev/null
+  # No -a by default → CLI auto-detects every installed agent dir and targets all of them.
+  npx -y skills add "$repo" $scope_flag "${agent_args[@]}" $rest -y </dev/null
   echo
   count=$((count + 1))
 done <"$profile_file"
