@@ -26,6 +26,16 @@ Scope is set **per profile entry** (one `<repo> [global|project]` line in a prof
 
 In practice you rarely need to be stingy with global: agents use **progressive disclosure** — only skill names and descriptions are kept in context; the full instructions load only when a task matches.
 
+### Which agents get the skills
+
+`install.sh` doesn't pass `--agent`, so the `npx skills` CLI **auto-detects every installed agent** (it looks for `~/.claude/`, `~/.qwen/`, `~/.continue/`, `~/.cursor/`, …) and installs to all of them. The real files land in a shared store at `~/.agents/skills/<name>/`, and each agent directory gets a **symlink** to it — install once, every agent sees it.
+
+To target a fixed set instead, set `CORETEX_AGENTS` (comma-separated):
+
+```sh
+CORETEX_AGENTS=claude-code,qwen-code bash scripts/install.sh system
+```
+
 ### Profiles
 
 A profile is a versioned list of `<repo> <scope>` lines under `profiles/<name>.txt`. Bundling lets you re-create the same setup on any machine.
@@ -60,8 +70,10 @@ bash ~/Documents/NETCASE/Code/coretex/scripts/install.sh system
 
 # 3. Optional alias for convenience
 echo 'alias coretex="bash ~/Documents/NETCASE/Code/coretex/scripts/install.sh"' >> ~/.zshrc
-exec zsh
+source ~/.zshrc        # or open a new terminal
 ```
+
+Then `coretex system` ≡ `bash ~/Documents/NETCASE/Code/coretex/scripts/install.sh system`.
 
 ### Per project (project-scoped skills)
 
@@ -89,6 +101,19 @@ npx skills list                    # see what's installed
 npx skills remove <skill-name>     # remove a single skill
 ```
 
+### How `install.sh` works
+
+`bash scripts/install.sh <profile>`:
+
+1. Reads `profiles/<profile>.txt`, skipping `#` comments and blank lines.
+2. For each entry `<owner/repo> [global|project] [extra-flags…]`:
+   - resolves the scope (`global` → `-g`, `project` → none → installs into `$PWD/.claude/skills/`)
+   - runs `npx skills add <owner/repo> [-g] [extra-flags…] -y`
+   - no `--agent` → the CLI targets every detected agent (unless `CORETEX_AGENTS` is set)
+3. Prints a one-line result per source.
+
+It's **idempotent** — re-running just re-installs / updates. `npx skills update` is the lighter way to refresh everything later. For `project`-scoped entries, the target is your **current working directory**, so `cd` into the project first.
+
 ## Flow at a glance
 
 ```
@@ -105,9 +130,10 @@ npx skills remove <skill-name>     # remove a single skill
    npx skills add               git clone + bash scripts/install.sh
             │                                │
             ▼                                ▼
-   `~/.claude/skills/`         profile decides scope per source:
-   (just coretex's skills)     global → `~/.claude/skills/`
-                               project → `./.claude/skills/` (CWD)
+   ~/.agents/skills/<name>/     profile decides scope per source:
+   + symlinks into every        global  → ~/.agents/skills/ + symlinks
+   detected agent dir                       into every detected agent
+                                project → ./.claude/skills/ (CWD)
 ```
 
 ## Available skills
