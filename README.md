@@ -95,7 +95,17 @@ After every install, coretex writes a **manifest** so it knows which skills are 
 
 The project manifest is meant to be **committed** into the project repo — it makes the skill setup reproducible for collaborators.
 
-Each manifest entry records: `source`, `provider` (detected: `github` / `git` / `local`), `scope`, `profile`, `agents`, `first_seen`, `updated_at`, and an `adopted` flag (`true` if the skill already existed before coretex first picked it up). `coretex status` uses this to mark each skill as **`coretex`** (installed by coretex), **`adopt`** (existed already, now managed), or **`ext`** (external — coretex doesn't manage it).
+Each manifest entry records: `source`, `provider` (detected: `github` / `git` / `local`), `scope`, `profile`, `agents`, `first_seen`, `updated_at`, and an `adopted` flag (write-once — `true` if the skill already existed before coretex first picked it up; stays `true` forever after, even if you remove and re-install).
+
+#### The `BY` column
+
+`coretex status` derives a **`BY`** value for every installed skill by checking the appropriate manifest (global manifest for skills under `~/.agents/skills/`, the project manifest for skills under a project's `.claude/skills/`):
+
+| Value | Meaning | When you'll see it |
+|---|---|---|
+| **`coretex`** | The skill was installed by coretex — it didn't exist on disk before the install ran. | Normal case after `coretex install <profile>` adds a new source. |
+| **`adopt`** | The skill was already on disk when coretex first ran. Coretex took it over and tracks it from now on, but didn't put it there. **Write-once**: stays `adopt` forever, even after manual remove + re-install. | First time you run `coretex install` on a machine that already has skills installed manually. |
+| **`ext`** | The skill is on disk but **not** in any manifest. Coretex doesn't manage it and won't touch it on update/remove. | Skill was added with bare `npx skills add`, came from a non-coretex installer, or the install failed silently and never made it to the manifest. |
 
 ## Setup
 
@@ -119,7 +129,7 @@ coretex install system
 coretex install [<profile>]   install all sources from profiles/<profile>.json
                               (no <profile> → numbered picker)
 coretex status                list installed skills — global first, then project
-                              (with BY column: coretex / adopt / ext)
+                              (with `BY` column; see "The BY column" below)
 coretex detect-agents         show which agents auto-detect would target
 coretex update                update all installed skills        (coming soon)
 coretex remove                remove installed skills            (coming soon)
@@ -194,9 +204,8 @@ coretex install system
 
 # 5. See what was installed and how coretex sees it
 coretex status
-#   BY column: `coretex` = installed by coretex
-#              `adopt`   = was already there before coretex saw it
-#              `ext`     = not in any manifest (coretex doesn't manage it)
+#   The `BY` column shows whether each skill is coretex-managed,
+#   adopted, or external — see "The BY column" in Concepts.
 
 # 6. In a project that needs framework-specific skills:
 cd ~/Code/my-payload-project
@@ -268,11 +277,33 @@ Accepts `~`, absolute (`/Users/...`), and relative (`./skills/...`). The leading
 
 #### Add a skill from a private Git repo
 
+Use the full clone URL as `source`. Anything `git clone` can handle works — coretex hands the string straight to git.
+
+| Host | HTTPS form | SSH form |
+|---|---|---|
+| GitHub (private) | `https://github.com/org/repo.git` | `git@github.com:org/repo.git` |
+| GitLab (cloud) | `https://gitlab.com/group/repo.git` | `git@gitlab.com:group/repo.git` |
+| Bitbucket (cloud) | `https://bitbucket.org/workspace/repo.git` | `git@bitbucket.org:workspace/repo.git` |
+| Self-hosted GitLab | `https://gitlab.netcase.ch/team/skills.git` | `git@gitlab.netcase.ch:team/skills.git` |
+| Bitbucket Server / Data Center | `https://bitbucket.netcase.ch/scm/PROJ/skills.git` | `ssh://git@bitbucket.netcase.ch:7999/proj/skills.git` |
+
+Example:
+
 ```json
-{ "source": "git@gitlab.example.com:team/skills.git", "scope": "global" }
+{ "source": "git@bitbucket.org:netcase/internal-skills.git", "scope": "global" }
 ```
 
-Anything `git clone` can handle works (https, ssh, custom hosts).
+**Auth setup** — coretex doesn't handle credentials itself; it just runs `git clone` under the hood. You need one of:
+
+- **SSH (recommended for private repos)** — add your public key to the host (Bitbucket: Personal settings → SSH keys; GitLab: Preferences → SSH Keys; GitHub: Settings → SSH and GPG keys), load the private key into the agent (`ssh-add ~/.ssh/id_ed25519`), and test with `ssh -T git@bitbucket.org` (or the equivalent host).
+- **HTTPS** — configure a credential helper so the password isn't prompted on every clone:
+  ```sh
+  git config --global credential.helper osxkeychain   # macOS
+  git config --global credential.helper store         # Linux (writes ~/.git-credentials, plaintext)
+  ```
+  For Bitbucket/GitLab use an **app password / personal access token**, not your account password.
+
+If the clone fails, you'll see `fatal: Authentication failed` (HTTPS) or `Permission denied (publickey)` (SSH) in the install output — and the skill won't end up in the manifest.
 
 #### Create a new profile
 
@@ -295,7 +326,7 @@ The picker (`coretex install` without an argument) finds it automatically.
 
 #### Adopt manually-installed skills into coretex
 
-If a skill is already present (`coretex status` shows `ext`) and you want coretex to track it, add its repo to a profile and `coretex install <profile>`. The skill will be picked up in the post-install snapshot, written to the manifest, and marked **`adopt`** — coretex knows it was there first and is just managing it from now on. The `adopted` flag is write-once: it stays `true` forever, even if you later remove and re-install the skill.
+If a skill is already present (`coretex status` shows it as `ext`) and you want coretex to track it, add its source to a profile and run `coretex install <profile>`. The post-install snapshot picks the skill up, writes it to the manifest, and marks it as `adopt`. See [The BY column](#the-by-column) for the difference between `adopt` and `coretex`.
 
 #### Re-install after removing a skill manually
 
@@ -318,7 +349,7 @@ This doesn't touch the manifest — the entries are still valid, only the on-dis
 coretex status
 ```
 
-The **`BY`** column shows it row by row: `coretex` was put there by an install, `adopt` was there first and is now tracked, `ext` is invisible to coretex.
+The **`BY`** column shows the state for every row — see [The BY column](#the-by-column) for the three values and what they mean.
 
 You can also inspect the manifests directly:
 
@@ -342,6 +373,8 @@ Commit `.coretex.json` and the profile you used. Collaborators run `coretex inst
 | `local source path does not exist` | The path doesn't exist or isn't a directory. Try an absolute path or check the spelling. |
 | `Your branch and 'origin/main' have diverged` (when running git pull on coretex itself) | Unrelated to coretex usage — that's the repo containing this README. `git pull --rebase` or `git fetch && git reset --hard origin/main` if you don't care about local commits. |
 | A skill is missing after install | Check the `skills add` output for upstream errors (network, repo not found, no SKILL.md). Skipped skills aren't written to the manifest. |
+| `fatal: Authentication failed` (HTTPS) | For private repos: configure a credential helper (`git config --global credential.helper osxkeychain` on macOS) and use an app password / personal access token instead of your account password. |
+| `Permission denied (publickey)` (SSH) | Add your public key to the Git host (Bitbucket/GitLab/GitHub settings), load the private key into ssh-agent (`ssh-add ~/.ssh/id_ed25519`), and verify with `ssh -T git@<host>`. |
 | `coretex status` shows a skill as `ext` you thought was tracked | The skill is on disk but not in the manifest — either the install failed silently or it was installed outside coretex. Re-run `coretex install <profile>` to adopt it. |
 
 ## Flow at a glance
