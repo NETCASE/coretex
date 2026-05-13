@@ -22,23 +22,23 @@ The skills.sh CLI installs to one of two destinations:
 | **global** | `~/.claude/skills/` | "Always available" — system tools, thinking aids, publishers |
 | **project** | `./.claude/skills/` | Per-project — frameworks (Payload, Next.js), versioned with the project |
 
-Scope is set **per profile entry** (one `<repo> [global|project]` line in a profile file). The entire repo installs to that one scope — there is no per-skill scope flag. If you need both, list the repo twice with different scopes.
+Scope is set **per source** in a profile (one entry in the `sources` array). The entire repo installs to that one scope unless `skills` narrows it to specific names. If you need the same repo in both scopes, list it twice — once with `"scope": "global"`, once with `"scope": "project"` — and use `skills` to split the contents.
 
 In practice you rarely need to be stingy with global: agents use **progressive disclosure** — only skill names and descriptions are kept in context; the full instructions load only when a task matches.
 
 ### Which agents get the skills
 
-`install.sh` doesn't pass `--agent`, so the `npx skills` CLI **auto-detects every installed agent** (it looks for `~/.claude/`, `~/.qwen/`, `~/.continue/`, `~/.cursor/`, …) and installs to all of them. The real files land in a shared store at `~/.agents/skills/<name>/`, and each agent directory gets a **symlink** to it — install once, every agent sees it.
+By default, no `--agent` is passed, so the `npx skills` CLI **auto-detects every installed agent** (it looks for `~/.claude/`, `~/.qwen/`, `~/.continue/`, `~/.cursor/`, …) and installs to all of them. The real files land in a shared store at `~/.agents/skills/<name>/`, and each agent directory gets a **symlink** to it — install once, every agent sees it.
 
-To target a fixed set instead, set `CORETEX_AGENTS` (comma-separated):
+Three ways to override, in order of precedence:
 
-```sh
-CORETEX_AGENTS=claude-code,qwen-code bash scripts/install.sh system
-```
+1. **Per source** in a profile — `"agents": ["claude-code", "qwen-code"]` on the entry.
+2. **Per run** via env var — `CORETEX_AGENTS=claude-code,qwen-code coretex install system`. Applies to sources that don't specify their own `agents`.
+3. **Default** — both omitted → auto-detect.
 
 ### Profiles
 
-A profile is a versioned list of `<repo> <scope>` lines under `profiles/<name>.txt`. Bundling lets you re-create the same setup on any machine.
+A profile is a versioned JSON file under `profiles/<name>.json` describing which sources to install at which scope. Bundling lets you re-create the same setup on any machine.
 
 Initial profiles:
 
@@ -49,13 +49,56 @@ Initial profiles:
 | `web-design` | Web and UI/UX work |
 | `thinktank` | Ideation, planning, structured thinking |
 
-Edit `profiles/<name>.txt` to activate or add sources. Each line is:
+#### Profile schema
 
-```
-<owner/repo> [global|project] [extra-flags...]
+```json
+{
+  "name": "system",
+  "description": "Base skills installed on every machine.",
+  "sources": [
+    { "provider": "github",    "repo": "NETCASE/coretex",   "scope": "global" },
+    { "provider": "github",    "repo": "anthropics/skills", "scope": "global",  "skills": ["skill-creator"] },
+    { "provider": "skills.sh", "name": "vercel-labs/agent-skills", "scope": "project" },
+    { "provider": "git",       "url":  "git@gitlab.example.com:team/skills.git", "scope": "project" },
+    { "provider": "local",     "path": "~/work/my-skills",  "scope": "project", "agents": ["claude-code"] }
+  ]
+}
 ```
 
-Extra flags are passed straight to `npx skills add`. Most useful is `--skill <name1> <name2>` to install only specific skills from a multi-skill repo (e.g. only `skill-creator` from `anthropics/skills`'s 17 skills). Lines starting with `#` are ignored.
+Each `sources` entry has common fields and provider-specific fields.
+
+**Common:**
+
+| Field | Required | Meaning |
+|---|---|---|
+| `provider` | no | `"github"` (default) · `"skills.sh"` · `"git"` · `"local"` |
+| `scope` | yes | `"global"` or `"project"` |
+| `skills` | no | Array of skill names. Omit = whole source. |
+| `agents` | no | Array of agent IDs. Omit = auto-detect (or `CORETEX_AGENTS`) |
+
+**Provider-specific:**
+
+| Provider | Source field | Example |
+|---|---|---|
+| `github` | `repo` | `"anthropics/skills"` — resolved through skills.sh |
+| `skills.sh` | `name` | `"vercel-labs/agent-skills"` — explicit registry lookup |
+| `git` | `url` | `"git@gitlab.example.com:team/skills.git"` or any https URL |
+| `local` | `path` | `"~/work/my-skills"` — also accepts absolute or `./relative` |
+
+Same source can be listed multiple times with different `scope`/`skills` combinations — e.g. one `global` entry installing only `skill-creator` and a second `project` entry installing `webapp-testing`.
+
+### What coretex tracks
+
+After every install, coretex writes a **manifest** so it knows which skills are managed by it (versus already installed by hand or by another tool):
+
+| Manifest | Location | Tracks |
+|---|---|---|
+| Global | `~/.coretex/manifest.json` | Skills installed with `"scope": "global"` |
+| Project | `<cwd>/.coretex.json` | Skills installed with `"scope": "project"`, per project directory |
+
+The project manifest is meant to be **committed** into the project repo — it makes the skill setup reproducible for collaborators.
+
+Each manifest entry records: `repo`, `scope`, `profile`, `agents`, `first_seen`, `updated_at`, and an `adopted` flag (`true` if the skill already existed before coretex first picked it up). `coretex status` uses this to mark each skill as **`coretex`** (installed by coretex), **`adopt`** (existed already, now managed), or **`ext`** (external — coretex doesn't manage it).
 
 ## Setup
 
@@ -76,10 +119,11 @@ coretex install system
 ### `coretex` commands
 
 ```
-coretex install [<profile>]   install all sources from profiles/<profile>.txt
+coretex install [<profile>]   install all sources from profiles/<profile>.json
                               (no <profile> → numbered picker)
 coretex status                list installed skills — global first, then project
-                              (with path, agents, and project name)
+                              (with BY column: coretex / adopt / ext)
+coretex detect-agents         show which agents auto-detect would target
 coretex update                update all installed skills        (coming soon)
 coretex remove                remove installed skills            (coming soon)
 coretex --help
@@ -95,7 +139,8 @@ For each new project you start working on:
 
 ```sh
 cd ~/Code/my-new-payload-project
-coretex install dev    # installs project-scoped sources from profiles/dev.txt into ./.claude/skills/
+coretex install dev    # installs project-scoped sources from profiles/dev.json into ./.claude/skills/
+                       # and writes a manifest to ./.coretex.json (commit it!)
 ```
 
 Note: for **project-scoped** entries the target is your **current working directory**, so `cd` into the project first.
@@ -119,14 +164,16 @@ npx skills remove <skill-name>     # remove a single skill
 
 `bash scripts/install.sh <profile>`:
 
-1. Reads `profiles/<profile>.txt`, skipping `#` comments and blank lines.
-2. For each entry `<owner/repo> [global|project] [extra-flags…]`:
-   - resolves the scope (`global` → `-g`, `project` → none → installs into `$PWD/.claude/skills/`)
-   - runs `npx skills add <owner/repo> [-g] [extra-flags…] -y`
-   - no `--agent` → the CLI targets every detected agent (unless `CORETEX_AGENTS` is set)
+1. Reads `profiles/<profile>.json` (validates JSON, errors loudly on bad syntax).
+2. For each entry in `sources`:
+   - resolves `scope` (`global` → `-g`; `project` → no flag → installs into `$PWD/.claude/skills/`)
+   - takes a snapshot of currently installed skills in that scope
+   - runs `npx skills add <repo> [-g] [-a …] [--skill …] -y`
+   - takes a second snapshot — the difference (or the explicit `skills` array) tells coretex which skill names to record
+   - upserts each one into the manifest (`~/.coretex/manifest.json` for global, `<cwd>/.coretex.json` for project), marking it `adopted: true` if it already existed before the install.
 3. Prints a one-line result per source.
 
-It's **idempotent** — re-running just re-installs / updates. `npx skills update` is the lighter way to refresh everything later. For `project`-scoped entries, the target is your **current working directory**, so `cd` into the project first.
+It's **idempotent** — re-running just refreshes manifest timestamps (and re-installs if upstream changed). For `project`-scoped entries, the target is your **current working directory**, so `cd` into the project first. `npx skills update` is the lighter way to refresh skill contents later without touching the manifest.
 
 ## Flow at a glance
 
@@ -179,7 +226,7 @@ skills/my-skill/
 ```
 coretex/
 ├── skills/           # published skills (one folder per skill)
-├── profiles/         # installable bundles: system.txt, dev.txt, web-design.txt, thinktank.txt
+├── profiles/         # installable bundles: system.json, dev.json, web-design.json, thinktank.json
 ├── scripts/
 │   ├── coretex.sh    # CLI dispatcher — the `coretex` alias points here (install / status)
 │   └── install.sh    # the actual installer: bash scripts/install.sh <profile>

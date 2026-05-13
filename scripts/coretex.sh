@@ -2,9 +2,10 @@
 # coretex — CLI for the NETCASE skills repo.
 #
 # Usage:
-#   coretex install [<profile>]   install all sources in profiles/<profile>.txt
+#   coretex install [<profile>]   install all sources in profiles/<profile>.json
 #                                 (no argument → pick from a list)
-#   coretex status                list installed skills: global, then project
+#   coretex status                list installed skills, with coretex-managed
+#                                 vs. external markers
 #   coretex detect-agents         agents auto-detect would target
 #   coretex update                update all installed skills   (coming soon)
 #   coretex remove                remove installed skills        (coming soon)
@@ -93,7 +94,18 @@ print_footer() {
 
 # ── shared helpers ───────────────────────────────────────────────
 list_profiles() {
-  ls "$PROFILES_DIR"/*.txt 2>/dev/null | xargs -n1 basename 2>/dev/null | sed 's/\.txt$//'
+  ls "$PROFILES_DIR"/*.json 2>/dev/null | xargs -n1 basename 2>/dev/null | sed 's/\.json$//'
+}
+
+# Manifest paths — kept in sync with install.sh.
+GLOBAL_MANIFEST="$HOME/.coretex/manifest.json"
+project_manifest_for() { echo "$1/.coretex.json"; }
+
+# Read manifest at $1 (defaults to empty manifest if missing) and emit the
+# skills object. Pipe to jq downstream.
+read_manifest() {
+  local path="$1"
+  if [[ -f "$path" ]]; then jq -c '.skills // {}' "$path"; else echo '{}'; fi
 }
 
 usage() {
@@ -101,9 +113,10 @@ usage() {
   cat <<EOF
   coretex — NETCASE skills CLI
 
-    coretex install [<profile>]   install all sources from profiles/<profile>.txt
+    coretex install [<profile>]   install all sources from profiles/<profile>.json
                                   (no <profile> → choose from a list)
-    coretex status                list installed skills (global, then folder)
+    coretex status                list installed skills (global, then folder),
+                                  with BY column: coretex / adopt / ext
     coretex detect-agents         show which agents auto-detect would target
     coretex update                update all installed skills        (coming soon)
     coretex remove                remove installed skills            (coming soon)
@@ -144,7 +157,7 @@ cmd_install() {
   if [[ -z "$profile" ]]; then
     profile="$(pick_profile)"
   fi
-  if [[ ! -f "$PROFILES_DIR/$profile.txt" ]]; then
+  if [[ ! -f "$PROFILES_DIR/$profile.json" ]]; then
     echo "no such profile: $profile  (have: $(list_profiles | paste -sd' ' -))" >&2
     exit 1
   fi
@@ -192,6 +205,36 @@ style_name_column() {
     }'
 }
 
+# Colour the BY column (always column 2 after style_name_column): coretex/adopt
+# in teal, ext in dim. NR<=2 = header + rule, untouched.
+style_by_column() {
+  awk -v t="$TEAL" -v d="$DIM" -v r="$RESET" '
+    NR<=2 { print; next }
+    {
+      # Walk fields by character to preserve the column padding produced by `column -t`.
+      # Approach: capture leading whitespace, then 1st token (NAME — possibly blank
+      # for repeated-name rows), its padding, then 2nd token (BY), then rest.
+      line = $0
+      out = ""
+      # leading ws (indent)
+      if (match(line, /^[[:space:]]+/)) { out = substr(line,1,RLENGTH); line = substr(line,RLENGTH+1) }
+      # name token (may be empty if this row has only spaces in column 1)
+      if (match(line, /^[^[:space:]]+/)) {
+        out = out substr(line,1,RLENGTH); line = substr(line,RLENGTH+1)
+      }
+      # whitespace between name and BY
+      if (match(line, /^[[:space:]]+/)) { out = out substr(line,1,RLENGTH); line = substr(line,RLENGTH+1) }
+      # the BY token
+      if (match(line, /^[^[:space:]]+/)) {
+        by = substr(line,1,RLENGTH); line = substr(line,RLENGTH+1)
+        if (by == "coretex" || by == "adopt") out = out t by r
+        else if (by == "ext")                 out = out d by r
+        else                                  out = out by
+      }
+      print out line
+    }'
+}
+
 # Display-name → home-relative dir for the per-agent symlink locations.
 AGENT_LINK_DIRS='{
   "Claude Code": ".claude",
@@ -213,22 +256,30 @@ AGENT_LINK_DIRS='{
 }'
 
 print_global() {
-  local json
+  local json manifest
   json="$(npx -y skills list --global --json 2>/dev/null || echo '[]')"
   if [[ "$(echo "$json" | jq 'length')" -eq 0 ]]; then echo "  $DIM(none)$RESET"; return; fi
+  manifest="$(read_manifest "$GLOBAL_MANIFEST")"
   {
-    printf 'NAME\tAGENT\tPATH\n'
+    printf 'NAME\tBY\tAGENT\tPATH\n'
     # One row per (skill, agent). PATH is the agent's symlink path; falls back to
     # the canonical store path when the agent's dir isn't in AGENT_LINK_DIRS.
-    echo "$json" | jq -r --argjson m "$AGENT_LINK_DIRS" --arg home "$HOME" '
+    # BY column: coretex / adopt / ext, computed against the global manifest.
+    echo "$json" | jq -r \
+      --argjson m "$AGENT_LINK_DIRS" \
+      --arg home "$HOME" \
+      --argjson mani "$manifest" '
       .[] | . as $s | ($s.agents // []) as $ags |
+      ( if $mani[$s.name] then
+          if $mani[$s.name].adopted then "adopt" else "coretex" end
+        else "ext" end ) as $by |
       if ($ags | length) == 0
-      then [ $s.name, "—", ($s.path | sub("^"+$home; "~")) ] | @tsv
-      else $ags[] | [ $s.name, .,
+      then [ $s.name, $by, "—", ($s.path | sub("^"+$home; "~")) ] | @tsv
+      else $ags[] | [ $s.name, $by, .,
                       ( if $m[.] then "~/" + $m[.] + "/skills/" + $s.name
                         else ($s.path | sub("^"+$home; "~")) end ) ] | @tsv
       end'
-  } | fmt_table | style_name_column
+  } | fmt_table | style_name_column | style_by_column
 }
 
 # Project skills, grouped by the folder that contains them.
@@ -237,6 +288,9 @@ print_global() {
 print_folders() {
   local json rows
   json="$(npx -y skills list --json 2>/dev/null || echo '[]')"
+  # Per-skill row: project_root, skill_name, agents_str, rel_path.
+  # The manifest lives at <project_root>/.coretex.json — we resolve BY per
+  # project root below, after grouping.
   rows="$(echo "$json" | jq -r --arg home "$HOME" '
     .[]
     | (.path | ltrimstr($home + "/")) as $rest
@@ -249,7 +303,7 @@ print_folders() {
         $m.rel ] | @tsv' 2>/dev/null)"
   if [[ -z "$rows" ]]; then echo "  $DIM(none)$RESET"; return; fi
 
-  local roots root first=1 short name
+  local roots root first=1 short name manifest
   roots="$(printf '%s\n' "$rows" | cut -f1 | sort -u)"
   while IFS= read -r root; do
     [[ -z "$root" ]] && continue
@@ -257,11 +311,18 @@ print_folders() {
     first=0
     short="${root/#$HOME/~}"
     name="$(basename "$root")"
+    manifest="$(read_manifest "$(project_manifest_for "$root")")"
     printf '  %s▸%s %s%s%s  %s%s%s\n\n' "$TEAL" "$RESET" "$BOLD" "$name" "$RESET" "$DIM" "$short" "$RESET"
     {
-      printf 'NAME\tAGENTS\tPATH\n'
-      printf '%s\n' "$rows" | awk -F'\t' -v r="$root" 'BEGIN{OFS="\t"} $1==r { print $2,$3,$4 }'
-    } | fmt_table | style_name_column
+      printf 'NAME\tBY\tAGENTS\tPATH\n'
+      printf '%s\n' "$rows" \
+        | awk -F'\t' -v r="$root" 'BEGIN{OFS="\t"} $1==r { print $2,$3,$4 }' \
+        | jq -Rr --argjson mani "$manifest" 'split("\t") as $r |
+            ( if $mani[$r[0]] then
+                if $mani[$r[0]].adopted then "adopt" else "coretex" end
+              else "ext" end ) as $by |
+            [ $r[0], $by, $r[1], $r[2] ] | @tsv'
+    } | fmt_table | style_name_column | style_by_column
   done <<<"$roots"
 }
 
