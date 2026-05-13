@@ -90,7 +90,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   # $rest is intentionally unquoted so extra flags split into separate args.
   # </dev/null prevents npx from consuming our profile file via stdin (kills the loop otherwise).
   # No -a by default → CLI auto-detects every installed agent dir and targets all of them.
-  npx -y skills add "$repo" $scope_flag "${agent_args[@]}" $rest -y </dev/null
+  npx -y skills add "$repo" $scope_flag ${agent_args[@]+"${agent_args[@]}"} $rest -y </dev/null
   echo
   count=$((count + 1))
 done <"$profile_file"
