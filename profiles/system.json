@@ -2,7 +2,7 @@
   "name": "system",
   "description": "Base skills installed on every machine.",
   "sources": [
-    { "provider": "github", "repo": "NETCASE/coretex", "scope": "global" },
-    { "provider": "github", "repo": "anthropics/skills", "scope": "global", "skills": ["skill-creator"] }
+    { "source": "NETCASE/coretex",   "scope": "global" },
+    { "source": "anthropics/skills", "scope": "global", "skills": ["skill-creator"] }
   ]
 }

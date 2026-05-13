@@ -9,16 +9,18 @@
 #   global scope  →  ~/.coretex/manifest.json
 #   project scope →  <cwd>/.coretex.json
 #
-# Source schema (one entry per element of profile.sources). Common fields:
+# Source schema (one entry per element of profile.sources):
+#   source   string                 required (see "source formats" below)
 #   scope    "global" | "project"   required
 #   skills   ["a","b"]              optional (omit = whole source)
 #   agents   ["x","y"]              optional (omit = auto-detect / CORETEX_AGENTS)
 #
-# Provider-specific fields:
-#   provider="github" (default)     repo: "owner/name"
-#   provider="skills.sh"            name: "owner/name"   (resolved via registry)
-#   provider="git"                  url:  "git@host:org/repo.git" or https://…
-#   provider="local"                path: "/abs/path" or "~/rel" or "./rel"
+# Source formats — provider is detected from the string itself:
+#   "owner/name"                 → github (resolved via skills.sh registry)
+#   "https://…", "http://…",
+#   "git://…", "ssh://…", "git@…"  → git (direct clone, bypasses registry)
+#   "/abs/path", "~/rel",
+#   "./rel", "../rel"            → local (filesystem)
 #
 # Env vars:
 #   CORETEX_AGENTS=claude-code,qwen   default agents for sources without
@@ -124,45 +126,51 @@ snapshot_for_scope() {
   esac
 }
 
-# ── provider resolution ──────────────────────────────────────────
-# Reads one source object from stdin (compact JSON), echoes "<provider>\t<source>"
-# where <source> is the string we hand to `skills add`. Returns non-zero on
-# missing/invalid fields and prints an error.
+# ── source resolution ────────────────────────────────────────────
+# Reads one source object (compact JSON), echoes "<provider>\t<resolved>"
+# where <resolved> is the string passed to `skills add`. The provider is
+# inferred from the source string itself. Returns non-zero on bad input.
 resolve_source() {
   local src="$1"
-  local provider repo name url path resolved
-  provider="$(jq -r '.provider // "github"' <<<"$src")"
+  local s resolved provider
+  s="$(jq -r '.source // ""' <<<"$src")"
+  [[ -z "$s" ]] && { echo "  ! source entry missing .source: $src" >&2; return 1; }
 
-  case "$provider" in
-    github)
-      repo="$(jq -r '.repo // ""' <<<"$src")"
-      [[ -z "$repo" ]] && { echo "  ! github source missing .repo: $src" >&2; return 1; }
-      [[ "$repo" =~ ^[^/]+/[^/]+$ ]] || { echo "  ! github .repo must be owner/name, got '$repo'" >&2; return 1; }
-      resolved="$repo"
-      ;;
-    skills.sh)
-      name="$(jq -r '.name // ""' <<<"$src")"
-      [[ -z "$name" ]] && { echo "  ! skills.sh source missing .name: $src" >&2; return 1; }
-      resolved="$name"
-      ;;
-    git)
-      url="$(jq -r '.url // ""' <<<"$src")"
-      [[ -z "$url" ]] && { echo "  ! git source missing .url: $src" >&2; return 1; }
-      resolved="$url"
-      ;;
-    local)
-      path="$(jq -r '.path // ""' <<<"$src")"
-      [[ -z "$path" ]] && { echo "  ! local source missing .path: $src" >&2; return 1; }
-      # Expand ~ and relative paths to absolute.
-      case "$path" in
-        "~"|"~/"*) path="${HOME}${path#\~}" ;;
+  case "$s" in
+    # Local filesystem paths.
+    "/"*|"~"|"~/"*|"./"*|"../"*)
+      provider="local"
+      resolved="$s"
+      # Expand ~ → $HOME.
+      case "$resolved" in
+        "~"|"~/"*) resolved="${HOME}${resolved#\~}" ;;
       esac
-      [[ "$path" != /* ]] && path="$(cd "$PWD" && cd "$path" 2>/dev/null && pwd)" || true
-      [[ -d "$path" ]] || { echo "  ! local source path does not exist: $path" >&2; return 1; }
-      resolved="$path"
+      # Resolve relative paths to absolute.
+      [[ "$resolved" != /* ]] && resolved="$(cd "$resolved" 2>/dev/null && pwd)" || true
+      [[ -n "$resolved" && -d "$resolved" ]] || {
+        echo "  ! local source path does not exist: $s" >&2; return 1;
+      }
+      ;;
+    # Explicit git URLs (any host, any protocol).
+    http://*|https://*|git://*|ssh://*|git@*)
+      provider="git"
+      resolved="$s"
+      ;;
+    # owner/name → github via skills.sh registry.
+    */*)
+      # Single slash + no whitespace; reject paths-with-more-slashes silently here
+      # (they'd be local without a leading ./, which we don't accept implicitly).
+      if [[ "$s" =~ ^[^[:space:]/]+/[^[:space:]/]+$ ]]; then
+        provider="github"
+        resolved="$s"
+      else
+        echo "  ! source '$s' looks like a path — prefix with ./ for local sources" >&2
+        return 1
+      fi
       ;;
     *)
-      echo "  ! unknown provider '$provider' (expected: github | skills.sh | git | local)" >&2
+      echo "  ! unrecognized source format: '$s'" >&2
+      echo "    expected: owner/name | https://… | git@… | /abs/path | ~/… | ./…" >&2
       return 1
       ;;
   esac

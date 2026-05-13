@@ -2,8 +2,8 @@
   "name": "dev",
   "description": "Software development skills (Payload, Next.js, Matt Pocock).",
   "sources": [
-    { "provider": "github", "repo": "payloadcms/payload",      "scope": "project" },
-    { "provider": "github", "repo": "vercel-labs/next-skills", "scope": "project" },
-    { "provider": "github", "repo": "mattpocock/skills",       "scope": "project" }
+    { "source": "payloadcms/payload",      "scope": "project" },
+    { "source": "vercel-labs/next-skills", "scope": "project" },
+    { "source": "mattpocock/skills",       "scope": "project" }
   ]
 }
