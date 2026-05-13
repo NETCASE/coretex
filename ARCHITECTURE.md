@@ -38,40 +38,43 @@ skills** with the **manifest**:
 
 | On disk? | In manifest? | BY |
 |---|---|---|
-| yes | yes, `adopted=false` | `coretex` |
-| yes | yes, `adopted=true`  | `adopt` |
-| yes | no                   | `ext` |
-| no  | yes                  | (orphan — currently shown only by inspecting the manifest directly; future `coretex remove --prune` will surface it) |
-| no  | no                   | — |
+| yes | yes | `coretex` — the skill belongs to a source in some profile, and coretex is tracking it |
+| yes | no  | `ext` — present on disk, unknown to coretex (manual `npx skills add`, leftover from another tool, …) |
+| no  | yes | orphan in the manifest (future `coretex remove --prune` will clean these) |
+| no  | no  | — |
 
-### Lifecycle of a single skill
+The manifest is a strict mirror of "what is referenced by some profile
+and made it onto disk". A skill that's *referenced* in a profile but
+that the install failed to put on disk is **not** in the manifest. A
+skill that's *on disk* but not referenced by any profile is **not**
+in the manifest, even if coretex saw it before.
+
+### Lifecycle of a skill
 
 ```
-        not installed
-              │
-              │   coretex install <profile>  (source new)
-              ▼
-    coretex  ◀────────┐
-        │             │ skills.sh update / coretex install (re-run)
-        │             │
-        │ user        │
-        │ removes     │
-        ▼ manually    │
-    orphan in        ─┘
-    manifest
-
-    manually installed
-              │
-              │   coretex install <profile> picks it up in the post-install snapshot
-              ▼
-    adopt  (write-once — even after manual remove + coretex re-install)
+        not in profile, not on disk
+                  │
+                  │ user adds source to profile and runs coretex install
+                  ▼
+        ┌────────────────────┐
+        │   coretex          │  ← in profile, on disk, in manifest
+        │                    │
+        └────────────────────┘
+            ▲             │
+            │             │ user removes source from profile,
+   coretex  │             │ runs coretex install (future --prune)
+   install  │             ▼
+            │     orphan in manifest
+            │     (will be cleaned by --prune)
+            │
+        manually installed
+        (on disk, not in profile, not in manifest = ext)
 ```
 
-The `adopted` flag is fixed at first contact. It answers *"did coretex
-originally put this skill on the machine?"* — not *"is coretex currently
-keeping it alive?"* That separation matters when implementing
-`coretex remove`: an `adopt`-flagged skill predates coretex and the user
-likely wants confirmation before removal.
+A skill never "remembers" that it was installed outside coretex — once
+it's referenced by a profile and the install succeeds, it's `coretex`,
+full stop. If the user removes the source from the profile later, the
+manifest entry becomes an orphan and the skill goes back to `ext`.
 
 ---
 
@@ -125,22 +128,22 @@ This is the most useful read on a first contact: trace one command end-to-end.
    - `jq -e .` against `profiles/<profile>.json` — fail fast on bad JSON.
    - Loop over each element of `.sources[]`, calling `install_one_source`.
 
-3. **`install_one_source`** ([coretex.sh:94-195](scripts/coretex.sh#L94-L195)). For each entry:
+3. **`install_one_source`** ([coretex.sh](scripts/coretex.sh)). For each entry:
    - **Validate scope** (global / project / else skip).
    - **`resolve_source`** ([lib/source.sh:resolve_source](scripts/lib/source.sh#L15-L57)) — pattern-match the `source` string to `(provider, resolved_path_or_url)`. See §6.1.
    - **Build CLI args**. `--skill` and `-a` are variadic in the skills
      CLI, so order matters: `-a …` first, `--skill …` last.
-   - **`snapshot_for_scope` (before)** — JSON array of skills the CLI
-     currently sees in this scope.
+   - **Decide which names belong to this source** (§6.2): explicit
+     `skills` list wins; otherwise `list_source_skills` asks
+     `skills add --list` and parses the output.
    - **`npx skills add <resolved> [-g] [-y] [-a …] [--skill …]`**. We
      redirect stdin from `</dev/null` so `npx` doesn't read the profile
      file (npm is quirky when stdin is a TTY-less file).
-   - **`snapshot_for_scope` (after)**.
-   - **Decide what to track in the manifest** (§6.2): explicit
-     `skills` list wins; otherwise diff after − before; if empty,
-     fall back to "everything in after".
+   - **`snapshot_for_scope` (after)** — JSON array of skills the CLI
+     reports for this scope after the install.
    - **`manifest_upsert`** ([lib/manifest.sh:manifest_upsert](scripts/lib/manifest.sh#L42-L62))
-     each tracked name. See §6.3 for the write-once trick.
+     for every expected name that the post-install snapshot confirms.
+     Names not in `after` are dropped (the install failed for them).
 
 4. **Footer**. `print_footer` writes the version / size / date line.
 
@@ -159,8 +162,7 @@ That's the entire install path. About 300 lines of bash, end to end.
    - `read_manifest "$GLOBAL_MANIFEST"` — the `.skills` object of the
      global manifest, or `{}` if missing.
    - One `jq` filter emits one row per `(skill, agent)`. The BY value
-     is derived inline:
-     `if $mani[name] then (if adopted then "adopt" else "coretex" end) else "ext" end`.
+     is derived inline: `if $mani[name] then "coretex" else "ext" end`.
    - The TSV is piped through `fmt_table → style_name_column → style_by_column`.
 
 3. **`print_folders`** ([coretex.sh:288-324](scripts/coretex.sh#L288-L324)).
@@ -217,8 +219,7 @@ Per-source:
       "profile":  "system",
       "agents":   ["Claude Code", "Continue", "Qwen Code"],
       "first_seen": "2026-05-13T18:19:43Z",   // write-once
-      "updated_at": "2026-05-13T19:02:11Z",   // refreshed every run
-      "adopted":  true                         // write-once (§6.3)
+      "updated_at": "2026-05-13T19:02:11Z"    // refreshed every run
     }
   }
 }
@@ -254,61 +255,61 @@ might have meant a path but wrote it without a leading dot.
 
 ### 6.2 Which skill names to track
 
-After running `skills add`, we have to decide which entries to write to
-the manifest. The skill names are not part of the CLI output, so we
-infer them:
+We need to know *which* skill names belong to a source before we run
+`skills add`, because the CLI doesn't tell us in its output. Two cases:
 
 ```
-if source had explicit `skills` list:
-    track exactly those names
-elif `after.names - before.names` is non-empty:
-    track the new names
+if source had explicit `skills` array:
+    track exactly those names           ← user told us, trust them
 else:
-    # re-run: the source had been fully installed before. Adopt every
-    # skill currently in this scope. This is the only place where we
-    # might over-attribute skills to a source, but it only happens
-    # when the diff is empty AND no skills list was given, so the
-    # blast radius is bounded.
-    track every name in `after`
+    track list_source_skills(source)    ← ask the CLI via --list
 ```
 
-For each candidate, we look it up in `after` to grab the *actual* agents
-list (which differs from what was requested when auto-detect runs). If
-the name isn't present in `after`, the install for that skill failed —
-we skip the manifest entry.
+`list_source_skills` ([lib/source.sh](scripts/lib/source.sh#L70-L77))
+runs `npx skills add <source> --list`, strips ANSI escapes from the
+output, and matches the `│    <name>` lines the CLI uses to list each
+skill in the source.
+
+If `--list` returns nothing (offline, broken source, transient error)
+we warn and proceed without writing manifest entries. This is the
+right failure mode: we'd rather under-record than write phantom
+entries that don't reflect what the install actually did.
+
+After `skills add` runs, we take a post-install snapshot
+(`snapshot_for_scope`). For each expected name we look it up in the
+snapshot to grab the *actual* agents list (auto-detect may install to
+more agents than the profile requested). If the name isn't present in
+`after`, the install failed for that skill — we skip the manifest
+entry. Failed installs never appear in the manifest.
 
 ### 6.3 Manifest write-once fields
 
-`first_seen` and `adopted` must not flip on re-runs. The
+`first_seen` must not change on re-runs. The
 [manifest_upsert](scripts/lib/manifest.sh#L42-L62) `jq` filter:
 
 ```jq
 .skills[$name] = (
-  (.skills[$name] // { adopted: $adopted, first_seen: $now })
+  (.skills[$name] // { first_seen: $now })
   + { provider: $provider, source: $source, scope: $scope,
       profile: $prof, agents: $agents, updated_at: $now }
+  | del(.adopted)
 )
 ```
 
-The `//` fallback supplies a default object with `adopted` + `first_seen`
-*only when the entry is absent*. The `+` merge that follows overrides
-every other field. So the two write-once fields enter the manifest on
-first write and never appear in any subsequent merge object.
+The `//` fallback supplies a default object with `first_seen` *only
+when the entry is absent*. The `+` merge that follows overrides every
+other field. So `first_seen` enters the manifest on first write and
+never appears in any subsequent merge object.
 
-Consequence: a skill that started as `adopt=true` (it was already on
-disk) stays `adopt` forever — even if you `npx skills remove` it and
-let coretex re-install. The flag records origin, not current state.
+`del(.adopted)` strips the legacy field from manifests written by
+earlier versions of coretex. It's harmless on fresh manifests.
 
 ### 6.4 BY column derivation (in `print_global` / `print_folders`)
 
 For each row from `skills list --json`:
 
 ```jq
-if $manifest[skill_name] then
-  if $manifest[skill_name].adopted then "adopt" else "coretex" end
-else
-  "ext"
-end
+if $manifest[skill_name] then "coretex" else "ext" end
 ```
 
 The relevant manifest depends on the skill's path: global manifest for
@@ -373,6 +374,38 @@ stay out of the credential business.
 See the longer discussion at the end of git history if you want
 context: PR-by-PR, this question got revisited and rejected three times.
 
+### Why no `adopt` flag any more?
+
+An earlier version of coretex had a third BY value, `adopt`, for
+skills that pre-existed on disk before coretex's first install. The
+flag was `write-once` — once set, it stayed set even after manual
+remove + reinstall. The idea was to give a future `coretex remove`
+a way to prompt before deleting skills that pre-dated coretex.
+
+We dropped it because:
+
+1. **It encouraged drift between profile and manifest.** When a
+   profile listed a source without an explicit `skills` array and the
+   `before/after` diff turned up empty (because all skills were
+   already on disk), the fallback was "track every skill currently in
+   scope" — even ones that had nothing to do with this source. They
+   got `adopted: true` and looked managed, but weren't really.
+
+2. **It was confusing.** Every doc had to explain three values
+   instead of two, and the `adopt` semantics ("origin, not current
+   state") never felt natural.
+
+3. **The remove-prompt use case can be served differently.** A
+   future `coretex remove` can compare `first_seen` to `updated_at`
+   or look at how recently the skill was referenced in a profile to
+   decide whether to prompt. Origin tracking isn't required for that.
+
+The replacement: `list_source_skills` queries the CLI directly for the
+canonical list of skill names in a source. No more diff-and-guess. The
+manifest now contains exactly the set of skills that a profile
+references and that made it onto disk. Two BY values cover it:
+`coretex` (in manifest) and `ext` (not in manifest).
+
 ### Why the library split (introduced after the first cut)?
 
 The original layout had `install.sh` as a separate worker script
@@ -394,7 +427,8 @@ install loop alongside the other commands.
 
 | Invariant | Where it's enforced | Why it matters |
 |---|---|---|
-| `adopted` and `first_seen` never change after first write | [lib/manifest.sh:manifest_upsert](scripts/lib/manifest.sh#L42-L62) | The audit trail would lie if they could flip. |
+| `first_seen` never changes after first write | [lib/manifest.sh:manifest_upsert](scripts/lib/manifest.sh#L42-L62) | The audit trail would lie if it could flip. |
+| Manifest only contains skills referenced by a profile (no `adopt` fallback) | [coretex.sh install_one_source](scripts/coretex.sh#L94-L195) + [lib/source.sh:list_source_skills](scripts/lib/source.sh#L70-L77) | Phantom manifest entries were the original cause of the `adopt` confusion; replaced by direct `skills add --list` query. |
 | Manifest is only written for skills the post-install snapshot confirms | [coretex.sh:183-186](scripts/coretex.sh#L183-L186) | Failed installs (auth, network, missing `SKILL.md`) leave no record. |
 | Project manifest lives at `$PWD`, not the profile's directory | [lib/manifest.sh:manifest_path_for](scripts/lib/manifest.sh#L21-L26) | A profile is portable; the manifest belongs to the project. |
 | `provider` is detected from the source string, never user-supplied | [lib/source.sh:resolve_source](scripts/lib/source.sh#L15-L57) | Removes a whole category of typo errors. |
@@ -413,13 +447,17 @@ that actually appears in `after`.
 **Empty `sources` array.** `thinktank.json` and `web-design.json` ship
 this way. We print "No sources" and exit cleanly — not an error.
 
-**Re-run with nothing new.** The before/after diff is empty. We fall
-back to "track every skill currently in scope" as adoptions. The
-write-once `adopted` flag prevents this from re-attributing already-
-tracked skills.
+**Re-run after manual remove.** `npx skills remove X` doesn't touch
+the manifest. Next `coretex install` calls `list_source_skills` to
+get the source's skill names, re-installs them, and the post-install
+snapshot confirms what's back on disk. `first_seen` stays at its
+original value (write-once); `updated_at` advances.
 
-**Manual `skills remove`.** Doesn't touch the manifest. Next `coretex
-install` re-installs; `adopted` stays as it was.
+**`--list` fails (offline / broken source).** `list_source_skills`
+returns an empty list. The install still runs, but we don't write
+manifest entries for that source. The skills will appear as `ext` in
+`coretex status` until the next successful install. A warning is
+emitted.
 
 **Corrupt manifest.** `read_manifest` falls back to `{}` for missing
 files, but a present-but-broken file will crash `jq`. We treat that as
@@ -475,8 +513,9 @@ Sketch (not yet implemented):
 
 - Read manifest. For each entry, optionally `npx skills remove <name>`
   with the recorded scope.
-- If `adopted == true`, prompt before removing — coretex isn't the
-  origin, so the user might want to keep the skill.
+- For each entry, compare `first_seen` against the source's earliest
+  mention in the profiles directory. If the skill was tracked long
+  before the current profile referenced it, prompt before removing.
 - Delete the entry from the manifest only if the post-snapshot
   confirms the skill is actually gone.
 
@@ -501,9 +540,9 @@ Two layers:
 | **Profile** | A `profiles/<name>.json` file listing sources + scopes. The replayable unit. |
 | **Scope** | `global` (machine-wide) or `project` (per-CWD). Decides which manifest gets the entry. |
 | **Manifest** | The JSON file (`~/.coretex/manifest.json` or `<cwd>/.coretex.json`) where coretex records what it installed. |
-| **Adopted** | A skill that pre-dated coretex on the machine and was picked up by the first install. Stays adopted forever. |
-| **BY** | The `coretex status` column showing each skill's relationship to coretex: `coretex` / `adopt` / `ext`. |
-| **Snapshot** | The JSON output of `npx skills list --json` at a point in time, filtered to a scope. Used as before/after to detect new installs. |
+| **BY** | The `coretex status` column showing each skill's relationship to coretex: `coretex` (in manifest) / `ext` (not in manifest). |
+| **ext** | A skill on disk that's not in any coretex manifest — installed manually or by another tool. |
+| **Snapshot** | The JSON output of `npx skills list --json` at a point in time, filtered to a scope. Used post-install to confirm each expected skill actually landed on disk and to read its `agents` list. |
 
 ---
 

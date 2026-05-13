@@ -32,15 +32,15 @@ manifest_init() {
   echo '{"version":1,"skills":{}}' > "$path"
 }
 
-# manifest_upsert <path> <name> <provider> <source> <scope> <profile> <agents_json> <adopted_bool>
+# manifest_upsert <path> <name> <provider> <source> <scope> <profile> <agents_json>
 #
-# `adopted` and `first_seen` are write-once — they capture the state at the
-# moment coretex first saw the skill and must not flip on later re-installs.
-# Implementation: the `//` fallback supplies a default object containing those
-# two fields only when the entry is absent; the trailing `+` merge overwrites
-# only the fields that should change every run.
+# Write-once invariant: `first_seen` captures when coretex first saw the skill
+# and never changes on later runs. Implementation: the `//` fallback supplies
+# a default object containing first_seen only when the entry is absent; the
+# trailing `+` merge overwrites every other field. `del(.adopted)` strips the
+# legacy field from old manifests.
 manifest_upsert() {
-  local path="$1" name="$2" provider="$3" source="$4" scope="$5" prof="$6" agents="$7" adopted="$8"
+  local path="$1" name="$2" provider="$3" source="$4" scope="$5" prof="$6" agents="$7"
   local now tmp
   now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   tmp="$(mktemp)"
@@ -50,12 +50,12 @@ manifest_upsert() {
      --arg scope "$scope" \
      --arg prof "$prof" \
      --argjson agents "$agents" \
-     --arg now "$now" \
-     --argjson adopted "$adopted" '
+     --arg now "$now" '
      .skills[$name] = (
-       (.skills[$name] // { adopted: $adopted, first_seen: $now })
+       (.skills[$name] // { first_seen: $now })
        + { provider: $provider, source: $source, scope: $scope, profile: $prof,
            agents: $agents, updated_at: $now }
+       | del(.adopted)
      )
   ' "$path" > "$tmp"
   mv "$tmp" "$path"

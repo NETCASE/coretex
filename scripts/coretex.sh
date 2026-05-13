@@ -4,7 +4,7 @@
 # Usage:
 #   coretex install [<profile>]   install all sources in profiles/<profile>.json
 #                                 (no argument → pick from a list)
-#   coretex status                list installed skills (BY: coretex / adopt / ext)
+#   coretex status                list installed skills (BY: coretex / ext)
 #   coretex detect-agents         agents auto-detect would target
 #   coretex update                update all installed skills   (coming soon)
 #   coretex remove                remove installed skills        (coming soon)
@@ -51,7 +51,7 @@ usage() {
     coretex install [<profile>]   install all sources from profiles/<profile>.json
                                   (no <profile> → choose from a list)
     coretex status                list installed skills (global, then folder),
-                                  with BY column: coretex / adopt / ext
+                                  with BY column: coretex / ext
     coretex detect-agents         show which agents auto-detect would target
     coretex update                update all installed skills        (coming soon)
     coretex remove                remove installed skills            (coming soon)
@@ -89,15 +89,16 @@ pick_profile() {
 # install_one_source <src_json> <profile_name>
 #
 # Process one entry from a profile's `sources` array. Resolves the source,
-# invokes `skills add`, snapshots before/after, and writes manifest entries
-# for the skills that the operation actually put on disk.
+# determines the authoritative skill list (explicit `skills` array or
+# `skills add --list`), runs the install, then writes a manifest entry for
+# every name the post-install snapshot confirms.
 install_one_source() {
   local src="$1" profile="$2"
   local scope provider source_str resolved_line
   local skills_json agents_json scope_flag
-  local before after manifest
+  local after manifest
   local skill_args agent_args desc tracked names_to_track
-  local before_names_json name actual_agents was_before
+  local name actual_agents
 
   scope="$(jq -r '.scope // "global"' <<<"$src")"
   case "$scope" in
@@ -145,7 +146,22 @@ install_one_source() {
   fi
   echo "→ $source_str ($scope)$desc"
 
-  before="$(snapshot_for_scope "$scope")"
+  # Decide which skill names belong to this source.
+  # 1. Explicit `skills` array → trust it.
+  # 2. Otherwise ask the skills CLI via --list. If that returns nothing
+  #    (offline, network failure, transient error), skip with a warning
+  #    — we'd rather under-record than write phantom manifest entries.
+  names_to_track=()
+  if [[ "$(jq 'length' <<<"$skills_json")" -gt 0 ]]; then
+    while IFS= read -r n; do names_to_track+=("$n"); done < <(jq -r '.[]' <<<"$skills_json")
+  else
+    while IFS= read -r n; do
+      [[ -n "$n" ]] && names_to_track+=("$n")
+    done < <(list_source_skills "$source_str")
+    if [[ ${#names_to_track[@]} -eq 0 ]]; then
+      echo "  ! could not list skills for $source_str — install proceeding without manifest tracking" >&2
+    fi
+  fi
 
   # </dev/null prevents npx from consuming the profile file via stdin.
   npx -y skills add "$source_str" $scope_flag -y \
@@ -157,36 +173,17 @@ install_one_source() {
   manifest="$(manifest_path_for "$scope")"
   manifest_init "$manifest"
 
-  # Decide which skill names to track in the manifest.
-  # 1. Explicit `skills` list → track exactly those.
-  # 2. Whole repo → diff after - before = new skills. If nothing new (re-run),
-  #    fall back to all skills present after.
-  names_to_track=()
-  if [[ "$(jq 'length' <<<"$skills_json")" -gt 0 ]]; then
-    while IFS= read -r n; do names_to_track+=("$n"); done < <(jq -r '.[]' <<<"$skills_json")
-  else
-    while IFS= read -r n; do names_to_track+=("$n"); done < <(
-      jq -r --argjson b "$before" --argjson a "$after" \
-        '([$a[].name] - [$b[].name]) | .[]' <<<null
-    )
-    if [[ ${#names_to_track[@]} -eq 0 ]]; then
-      while IFS= read -r n; do names_to_track+=("$n"); done < <(jq -r '.[].name' <<<"$after")
-    fi
-  fi
-
-  before_names_json="$(jq '[.[].name]' <<<"$before")"
   tracked=0
   for name in "${names_to_track[@]}"; do
     [[ -z "$name" ]] && continue
     actual_agents="$(jq -c --arg n "$name" \
       'map(select(.name == $n)) | (.[0].agents // [])' <<<"$after")"
-    # If the skill isn't in `after`, the install failed — skip the manifest entry.
+    # If the skill isn't in `after`, the install failed for this name — skip.
     if [[ -z "$actual_agents" || "$actual_agents" == "null" ]] || \
        [[ "$(jq --arg n "$name" 'any(.name == $n)' <<<"$after")" != "true" ]]; then
       continue
     fi
-    was_before="$(jq --arg n "$name" 'index($n) != null' <<<"$before_names_json")"
-    manifest_upsert "$manifest" "$name" "$provider" "$source_str" "$scope" "$profile" "$actual_agents" "$was_before"
+    manifest_upsert "$manifest" "$name" "$provider" "$source_str" "$scope" "$profile" "$actual_agents"
     tracked=$((tracked + 1))
   done
 
@@ -264,15 +261,13 @@ print_global() {
     printf 'NAME\tBY\tAGENT\tPATH\n'
     # One row per (skill, agent). PATH is the agent's symlink path; falls back
     # to the canonical store path when the agent's dir isn't in AGENT_LINK_DIRS.
-    # BY column: coretex / adopt / ext, computed against the global manifest.
+    # BY column: coretex / ext, computed against the global manifest.
     echo "$json" | jq -r \
       --argjson m "$AGENT_LINK_DIRS" \
       --arg home "$HOME" \
       --argjson mani "$manifest" '
       .[] | . as $s | ($s.agents // []) as $ags |
-      ( if $mani[$s.name] then
-          if $mani[$s.name].adopted then "adopt" else "coretex" end
-        else "ext" end ) as $by |
+      ( if $mani[$s.name] then "coretex" else "ext" end ) as $by |
       if ($ags | length) == 0
       then [ $s.name, $by, "—", ($s.path | sub("^"+$home; "~")) ] | @tsv
       else $ags[] | [ $s.name, $by, .,
@@ -315,9 +310,7 @@ print_folders() {
       printf '%s\n' "$rows" \
         | awk -F'\t' -v r="$root" 'BEGIN{OFS="\t"} $1==r { print $2,$3,$4 }' \
         | jq -Rr --argjson mani "$manifest" 'split("\t") as $r |
-            ( if $mani[$r[0]] then
-                if $mani[$r[0]].adopted then "adopt" else "coretex" end
-              else "ext" end ) as $by |
+            ( if $mani[$r[0]] then "coretex" else "ext" end ) as $by |
             [ $r[0], $by, $r[1], $r[2] ] | @tsv'
     } | fmt_table | style_name_column | style_by_column
   done <<<"$roots"

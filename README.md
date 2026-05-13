@@ -37,7 +37,7 @@ git add .coretex.json && git commit          # commit the manifest so others get
 | | |
 |---|---|
 | `coretex install [<profile>]` | Install all sources from `profiles/<profile>.json`. No arg → numbered picker. |
-| `coretex status` | List installed skills. `BY` column: `coretex` (we installed it), `adopt` (was there first, now tracked), `ext` (not in any manifest). |
+| `coretex status` | List installed skills. `BY` column: `coretex` (part of a profile, tracked) or `ext` (not in any manifest). |
 | `coretex detect-agents` | Show which agents skills.sh auto-detect would target on this machine. |
 | `coretex --help` | Help. |
 
@@ -119,7 +119,7 @@ Commit `.coretex.json` and the profile. Collaborators run `coretex install <prof
 | `unrecognized source format` | Check format — `owner/name`, full URL, or path with `./`/`~/`/`/` prefix |
 | `fatal: Authentication failed` (HTTPS) | Configure `git config --global credential.helper osxkeychain` and use an app password / PAT |
 | `Permission denied (publickey)` (SSH) | Add your key to the host, `ssh-add ~/.ssh/id_ed25519`, test with `ssh -T git@<host>` |
-| Skill shows as `ext` in status | Not in the manifest — it was installed outside coretex. Re-run `coretex install <profile>` to adopt it. |
+| Skill shows as `ext` in status | Not in the manifest — it was installed outside coretex. Add the source to a profile and re-run `coretex install <profile>` to track it. |
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for more on what coretex tracks, how `BY` is computed, and edge cases.
 

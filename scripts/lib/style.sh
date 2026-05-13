@@ -15,7 +15,7 @@
 #   total_skill_size         — humanised sum of known skill directories
 #   fmt_table                — TSV on stdin → aligned table with header rule
 #   style_name_column        — colour col1 teal; blank repeated names
-#   style_by_column          — colour BY token (coretex/adopt=teal, ext=dim)
+#   style_by_column          — colour BY token (coretex=teal, ext=dim)
 
 # ── colour palette ───────────────────────────────────────────────
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
@@ -134,9 +134,9 @@ style_by_column() {
       if (match(line, /^[[:space:]]+/)) { out = out substr(line,1,RLENGTH); line = substr(line,RLENGTH+1) }
       if (match(line, /^[^[:space:]]+/)) {
         by = substr(line,1,RLENGTH); line = substr(line,RLENGTH+1)
-        if (by == "coretex" || by == "adopt") out = out t by r
-        else if (by == "ext")                 out = out d by r
-        else                                  out = out by
+        if      (by == "coretex") out = out t by r
+        else if (by == "ext")     out = out d by r
+        else                      out = out by
       }
       print out line
     }'

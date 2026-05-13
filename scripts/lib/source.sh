@@ -3,10 +3,11 @@
 # Sourced by scripts/coretex.sh. Does not run standalone.
 #
 # Exposes:
-#   resolve_source <src_json>   — parse one source object, echo "<provider>\t<resolved>"
-#   snapshot_global             — JSON array of globally installed skills
-#   snapshot_project            — JSON array of skills under $PWD
-#   snapshot_for_scope <scope>  — dispatcher: global → snapshot_global, etc.
+#   resolve_source <src_json>     — parse one source object, echo "<provider>\t<resolved>"
+#   list_source_skills <resolved> — query the skills CLI for every skill name in a source
+#   snapshot_global               — JSON array of globally installed skills
+#   snapshot_project              — JSON array of skills under $PWD
+#   snapshot_for_scope <scope>    — dispatcher: global → snapshot_global, etc.
 
 # Reads one source object (compact JSON) and prints "<provider>\t<resolved>"
 # where <resolved> is the string passed to `skills add`. Provider is detected
@@ -54,6 +55,18 @@ resolve_source() {
   esac
 
   printf '%s\t%s\n' "$provider" "$resolved"
+}
+
+# Ask the skills CLI for the full list of skill names in a source, without
+# installing. Strips ANSI escapes, then matches the `│    <name>` lines that
+# the CLI emits for each discovered skill. Emits one name per line. If the
+# call fails, emits nothing — caller treats that as "I don't know what's in
+# this source" and the install loop falls back to the post-install snapshot.
+list_source_skills() {
+  local resolved="$1"
+  npx -y skills add "$resolved" --list </dev/null 2>/dev/null \
+    | sed 's/\x1b\[[0-9;]*m//g' \
+    | awk '/^│    [a-z][a-z0-9_-]+$/ { print $2 }'
 }
 
 snapshot_global() {
