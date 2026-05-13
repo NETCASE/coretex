@@ -1,403 +1,127 @@
 # NETCASE Agent Skills — `coretex`
 
-A collection of [Agent Skills](https://agentskills.io) maintained by [NETCASE GmbH](https://www.netcase.ch), plus a profile-based installer for replaying curated skill bundles on every machine. Compatible with Claude Code, skills.sh, and other [agent-skills-compatible](https://agentskills.io/clients) clients.
+A collection of [Agent Skills](https://agentskills.io) maintained by [NETCASE GmbH](https://www.netcase.ch), plus a profile-based installer (`coretex`) for replaying curated skill bundles on every machine.
 
-## Two roles in one repo
+Two roles in one repo:
 
-This repo wears two hats — they are independent:
+1. **Skill source** — `skills/` contains the skills NETCASE publishes. Install them anywhere with `npx skills add NETCASE/coretex`. No clone needed.
+2. **Installer** — `profiles/` + `scripts/` is YOUR machine setup. It pulls curated bundles (NETCASE + upstream) into the right scope on each machine. Requires cloning the repo.
 
-1. **Skill source** — `skills/` contains the skills NETCASE publishes. Anyone can install them via `npx skills add NETCASE/coretex`. You don't need to clone the repo for this.
-2. **Profile-based installer** — `profiles/` + `scripts/install.sh` is YOUR machine setup. It pulls curated bundles (NETCASE + upstream sources like `payloadcms/payload`, `mattpocock/skills`, etc.) into the right scope on each machine. This requires cloning the repo.
+For implementation details, code references, and how to extend `coretex`, see **[TECH.md](TECH.md)**.
 
-You can use role 1 without ever touching role 2, and vice versa.
+## Install
 
-## Concepts
+```sh
+# Prereqs
+brew install jq node                                                   # jq required; node for npx
 
-### Scope: global vs. project
+# Clone & alias
+gh repo clone NETCASE/coretex ~/Documents/NETCASE/Code/coretex
+echo 'alias coretex="bash ~/Documents/NETCASE/Code/coretex/scripts/coretex.sh"' >> ~/.zshrc
+source ~/.zshrc
 
-The skills.sh CLI installs to one of two destinations:
+# Install the system profile (globally, for every detected agent)
+coretex install system
+```
 
-| Scope | Location | When to use |
-|---|---|---|
-| **global** | `~/.claude/skills/` | "Always available" — system tools, thinking aids, publishers |
-| **project** | `./.claude/skills/` | Per-project — frameworks (Payload, Next.js), versioned with the project |
+In any project that needs framework-specific skills:
 
-Scope is set **per source** in a profile (one entry in the `sources` array). The entire repo installs to that one scope unless `skills` narrows it to specific names. If you need the same repo in both scopes, list it twice — once with `"scope": "global"`, once with `"scope": "project"` — and use `skills` to split the contents.
+```sh
+cd ~/Code/my-project
+coretex install dev                          # writes ./.claude/skills/ + ./.coretex.json
+git add .coretex.json && git commit          # commit the manifest so others get the same setup
+```
 
-In practice you rarely need to be stingy with global: agents use **progressive disclosure** — only skill names and descriptions are kept in context; the full instructions load only when a task matches.
+## Commands
 
-### Which agents get the skills
-
-By default, no `--agent` is passed, so the `npx skills` CLI **auto-detects every installed agent** (it looks for `~/.claude/`, `~/.qwen/`, `~/.continue/`, `~/.cursor/`, …) and installs to all of them. The real files land in a shared store at `~/.agents/skills/<name>/`, and each agent directory gets a **symlink** to it — install once, every agent sees it.
-
-Three ways to override, in order of precedence:
-
-1. **Per source** in a profile — `"agents": ["claude-code", "qwen-code"]` on the entry.
-2. **Per run** via env var — `CORETEX_AGENTS=claude-code,qwen-code coretex install system`. Applies to sources that don't specify their own `agents`.
-3. **Default** — both omitted → auto-detect.
-
-### Profiles
-
-A profile is a versioned JSON file under `profiles/<name>.json` describing which sources to install at which scope. Bundling lets you re-create the same setup on any machine.
-
-Initial profiles:
-
-| Profile | Purpose |
+| | |
 |---|---|
-| `system` | Base skills installed globally on every machine (NETCASE/coretex itself, etc.) |
-| `dev` | Software development context (Payload, Next.js, Matt Pocock) — usually project-scoped |
-| `web-design` | Web and UI/UX work |
-| `thinktank` | Ideation, planning, structured thinking |
+| `coretex install [<profile>]` | Install all sources from `profiles/<profile>.json`. No arg → numbered picker. |
+| `coretex status` | List installed skills. `BY` column: `coretex` (we installed it), `adopt` (was there first, now tracked), `ext` (not in any manifest). |
+| `coretex detect-agents` | Show which agents skills.sh auto-detect would target on this machine. |
+| `coretex --help` | Help. |
 
-#### Profile schema
+`coretex update` and `coretex remove` are placeholders for now — use `npx skills update` and `npx skills remove <name>` directly.
+
+## Profiles
+
+A profile is `profiles/<name>.json`. Schema:
 
 ```json
 {
   "name": "system",
-  "description": "Base skills installed on every machine.",
   "sources": [
-    { "source": "NETCASE/coretex",                              "scope": "global" },
-    { "source": "anthropics/skills",                            "scope": "global",  "skills": ["skill-creator"] },
-    { "source": "https://github.com/vercel-labs/agent-skills",  "scope": "project" },
-    { "source": "git@gitlab.example.com:team/skills.git",       "scope": "project" },
-    { "source": "~/work/my-skills",                             "scope": "project", "agents": ["claude-code"] }
+    { "source": "anthropics/skills", "scope": "global", "skills": ["skill-creator"] },
+    { "source": "NETCASE/coretex",   "scope": "global" }
   ]
 }
 ```
 
-Each `sources` entry has just four fields:
-
 | Field | Required | Meaning |
 |---|---|---|
-| `source` | yes | The skill source (see formats below) |
-| `scope` | yes | `"global"` or `"project"` |
-| `skills` | no | Array of skill names. Omit = whole source. |
-| `agents` | no | Array of agent IDs. Omit = auto-detect (or `CORETEX_AGENTS`) |
+| `source` | yes | A skill source (see formats below) |
+| `scope` | yes | `"global"` (→ `~/.agents/skills/`) or `"project"` (→ `$PWD/.claude/skills/`) |
+| `skills` | no | Specific skill names; omit = whole source |
+| `agents` | no | Specific agent IDs; omit = auto-detect (or `CORETEX_AGENTS` env) |
 
-**Source formats** — coretex detects the provider from the string itself:
+### Source formats
 
-| Source pattern | Provider | Example | Use when |
-|---|---|---|---|
-| `owner/name` | **github** | `"anthropics/skills"` | Standard — public GitHub repo, resolved through skills.sh |
-| `https://…` / `http://…` / `git://…` / `ssh://…` / `git@…` | **git** | `"git@gitlab.example.com:team/skills.git"` | Private repos, non-GitHub hosts, or to bypass skills.sh |
-| `/abs/path`, `~/rel`, `./rel`, `../rel` | **local** | `"~/work/my-draft-skill"` | A skill folder on your filesystem (typically while developing it) |
-
-Same source can be listed multiple times with different `scope`/`skills` combinations — e.g. one `global` entry installing only `skill-creator` and a second `project` entry installing `webapp-testing`.
-
-### What coretex tracks
-
-After every install, coretex writes a **manifest** so it knows which skills are managed by it (versus already installed by hand or by another tool):
-
-| Manifest | Location | Tracks |
+| Pattern | Provider | Example |
 |---|---|---|
-| Global | `~/.coretex/manifest.json` | Skills installed with `"scope": "global"` |
-| Project | `<cwd>/.coretex.json` | Skills installed with `"scope": "project"`, per project directory |
+| `owner/name` | github (via skills.sh) | `"anthropics/skills"` |
+| `https://…`, `git@…`, `ssh://…`, `git://…` | git | `"git@bitbucket.org:org/skills.git"` |
+| `/abs/path`, `~/rel`, `./rel` | local filesystem | `"~/work/my-draft"` |
 
-The project manifest is meant to be **committed** into the project repo — it makes the skill setup reproducible for collaborators.
+Any URL `git clone` accepts works — including private repos on GitHub, GitLab, Bitbucket (cloud and self-hosted). Authentication is handled by your normal git setup (ssh-agent or credential helper); coretex doesn't store credentials.
 
-Each manifest entry records: `source`, `provider` (detected: `github` / `git` / `local`), `scope`, `profile`, `agents`, `first_seen`, `updated_at`, and an `adopted` flag (write-once — `true` if the skill already existed before coretex first picked it up; stays `true` forever after, even if you remove and re-install).
+## Common tasks
 
-#### The `BY` column
+### Add a new source to a profile
 
-`coretex status` derives a **`BY`** value for every installed skill by checking the appropriate manifest (global manifest for skills under `~/.agents/skills/`, the project manifest for skills under a project's `.claude/skills/`):
+Edit `profiles/<name>.json`, append to `sources`, re-run `coretex install <name>`. Idempotent — existing sources are refreshed, the new one is added.
 
-| Value | Meaning | When you'll see it |
-|---|---|---|
-| **`coretex`** | The skill was installed by coretex — it didn't exist on disk before the install ran. | Normal case after `coretex install <profile>` adds a new source. |
-| **`adopt`** | The skill was already on disk when coretex first ran. Coretex took it over and tracks it from now on, but didn't put it there. **Write-once**: stays `adopt` forever, even after manual remove + re-install. | First time you run `coretex install` on a machine that already has skills installed manually. |
-| **`ext`** | The skill is on disk but **not** in any manifest. Coretex doesn't manage it and won't touch it on update/remove. | Skill was added with bare `npx skills add`, came from a non-coretex installer, or the install failed silently and never made it to the manifest. |
-
-## Setup
-
-### One-time per machine (global skills)
-
-```sh
-# 1. Clone the repo somewhere persistent
-gh repo clone NETCASE/coretex ~/Documents/NETCASE/Code/coretex
-
-# 2. Alias
-echo 'alias coretex="bash ~/Documents/NETCASE/Code/coretex/scripts/coretex.sh"' >> ~/.zshrc
-source ~/.zshrc        # or open a new terminal
-
-# 3. Install the system profile (global skills)
-coretex install system
-```
-
-### `coretex` commands
-
-```
-coretex install [<profile>]   install all sources from profiles/<profile>.json
-                              (no <profile> → numbered picker)
-coretex status                list installed skills — global first, then project
-                              (with `BY` column; see "The BY column" below)
-coretex detect-agents         show which agents auto-detect would target
-coretex update                update all installed skills        (coming soon)
-coretex remove                remove installed skills            (coming soon)
-coretex --help
-```
-
-Every command prints a `CoreTex · <command>` header and a footer with the repo version (`<branch>@<sha>`), total skill size, and date. Colours follow `NO_COLOR` / non-TTY conventions.
-
-`coretex.sh` is a thin dispatcher: `install` wraps `scripts/install.sh`; `status` reads `npx skills list --json` (needs `jq`, preinstalled on macOS).
-
-### Per project (project-scoped skills)
-
-For each new project you start working on:
-
-```sh
-cd ~/Code/my-new-payload-project
-coretex install dev    # installs project-scoped sources from profiles/dev.json into ./.claude/skills/
-                       # and writes a manifest to ./.coretex.json (commit it!)
-```
-
-Note: for **project-scoped** entries the target is your **current working directory**, so `cd` into the project first.
-
-### Updating
-
-```sh
-npx skills update    # updates ALL installed skills (global + project) to latest
-```
-
-`install.sh` only needs to be re-run when you change a profile file or add new sources. It is idempotent — safe to run multiple times.
-
-### Removing
-
-```sh
-npx skills list                    # see what's installed
-npx skills remove <skill-name>     # remove a single skill
-```
-
-### How `install.sh` works
-
-`bash scripts/install.sh <profile>`:
-
-1. Reads `profiles/<profile>.json` (validates JSON, errors loudly on bad syntax).
-2. For each entry in `sources`:
-   - resolves `scope` (`global` → `-g`; `project` → no flag → installs into `$PWD/.claude/skills/`)
-   - takes a snapshot of currently installed skills in that scope
-   - runs `npx skills add <resolved-source> [-g] [-a …] [--skill …] -y`
-   - takes a second snapshot — the difference (or the explicit `skills` array) tells coretex which skill names to record
-   - upserts each one into the manifest (`~/.coretex/manifest.json` for global, `<cwd>/.coretex.json` for project), marking it `adopted: true` if it already existed before the install.
-3. Prints a one-line result per source.
-
-It's **idempotent** — re-running just refreshes manifest timestamps (and re-installs if upstream changed). For `project`-scoped entries, the target is your **current working directory**, so `cd` into the project first. `npx skills update` is the lighter way to refresh skill contents later without touching the manifest.
-
-## How-to
-
-### Quick walkthrough — from zero to a tracked setup
-
-This takes about five minutes on a fresh machine.
-
-```sh
-# 1. Prereqs
-brew install jq node          # jq is required; node for npx
-
-# 2. Clone the repo somewhere persistent
-gh repo clone NETCASE/coretex ~/Documents/NETCASE/Code/coretex
-
-# 3. Alias `coretex` to the dispatcher
-echo 'alias coretex="bash ~/Documents/NETCASE/Code/coretex/scripts/coretex.sh"' >> ~/.zshrc
-source ~/.zshrc
-
-# 4. Install the system profile — globally, for every detected agent
-coretex install system
-
-# 5. See what was installed and how coretex sees it
-coretex status
-#   The `BY` column shows whether each skill is coretex-managed,
-#   adopted, or external — see "The BY column" in Concepts.
-
-# 6. In a project that needs framework-specific skills:
-cd ~/Code/my-payload-project
-coretex install dev           # writes ./.claude/skills/ + ./.coretex.json
-git add .coretex.json && git commit -m "track project skill setup"
-```
-
-After step 6 your collaborators can replay the exact same setup by running `coretex install dev` in the same project — the manifest tells `coretex status` which skills are part of the project bundle versus drifted in afterwards.
-
-### Recipes
-
-#### Add a new source to a profile
-
-Edit `profiles/<name>.json` and append a new entry under `sources`:
-
-```json
-{ "source": "mattpocock/skills", "scope": "global" }
-```
-
-Then re-run `coretex install <name>`. install.sh is idempotent — existing sources are refreshed, the new one is added.
-
-#### Install only specific skills from a multi-skill repo
-
-Use the `skills` field. `anthropics/skills` has 17+ skills; if you only want one:
+### Install only some skills from a multi-skill repo
 
 ```json
 { "source": "anthropics/skills", "scope": "global", "skills": ["skill-creator"] }
 ```
 
-#### Install the same repo at two scopes
+### Install for specific agents only
 
-List it twice with different `scope` (and optionally different `skills`):
-
-```json
-{ "source": "anthropics/skills", "scope": "global",  "skills": ["skill-creator"] },
-{ "source": "anthropics/skills", "scope": "project", "skills": ["webapp-testing"] }
-```
-
-#### Restrict an install to specific agents
-
-Two ways. Per source (wins over everything else):
+Per source (highest precedence):
 
 ```json
-{ "source": "NETCASE/coretex", "scope": "global",
-  "agents": ["claude-code", "qwen-code"] }
+{ "source": "NETCASE/coretex", "scope": "global", "agents": ["claude-code", "qwen-code"] }
 ```
 
-Per run, for every source that doesn't set its own `agents`:
+Per run (applies to sources without their own `agents`):
 
 ```sh
 CORETEX_AGENTS=claude-code,qwen-code coretex install system
 ```
 
-See which agents auto-detect would target on the current machine:
-
-```sh
-coretex detect-agents
-```
-
-#### Add a skill from a local folder
-
-Useful when you're developing a skill before publishing it:
+### Develop a skill locally before publishing
 
 ```json
 { "source": "~/work/my-draft-skill", "scope": "project" }
 ```
 
-Accepts `~`, absolute (`/Users/...`), and relative (`./skills/...`). The leading `./` or `/` is what tells coretex this is a local path rather than an `owner/name` repo.
+### Share a project's skill setup
 
-#### Add a skill from a private Git repo
+Commit `.coretex.json` and the profile. Collaborators run `coretex install <profile>` in the project root and get the exact same setup.
 
-Use the full clone URL as `source`. Anything `git clone` can handle works — coretex hands the string straight to git.
+## Troubleshooting
 
-| Host | HTTPS form | SSH form |
-|---|---|---|
-| GitHub (private) | `https://github.com/org/repo.git` | `git@github.com:org/repo.git` |
-| GitLab (cloud) | `https://gitlab.com/group/repo.git` | `git@gitlab.com:group/repo.git` |
-| Bitbucket (cloud) | `https://bitbucket.org/workspace/repo.git` | `git@bitbucket.org:workspace/repo.git` |
-| Self-hosted GitLab | `https://gitlab.netcase.ch/team/skills.git` | `git@gitlab.netcase.ch:team/skills.git` |
-| Bitbucket Server / Data Center | `https://bitbucket.netcase.ch/scm/PROJ/skills.git` | `ssh://git@bitbucket.netcase.ch:7999/proj/skills.git` |
-
-Example:
-
-```json
-{ "source": "git@bitbucket.org:netcase/internal-skills.git", "scope": "global" }
-```
-
-**Auth setup** — coretex doesn't handle credentials itself; it just runs `git clone` under the hood. You need one of:
-
-- **SSH (recommended for private repos)** — add your public key to the host (Bitbucket: Personal settings → SSH keys; GitLab: Preferences → SSH Keys; GitHub: Settings → SSH and GPG keys), load the private key into the agent (`ssh-add ~/.ssh/id_ed25519`), and test with `ssh -T git@bitbucket.org` (or the equivalent host).
-- **HTTPS** — configure a credential helper so the password isn't prompted on every clone:
-  ```sh
-  git config --global credential.helper osxkeychain   # macOS
-  git config --global credential.helper store         # Linux (writes ~/.git-credentials, plaintext)
-  ```
-  For Bitbucket/GitLab use an **app password / personal access token**, not your account password.
-
-If the clone fails, you'll see `fatal: Authentication failed` (HTTPS) or `Permission denied (publickey)` (SSH) in the install output — and the skill won't end up in the manifest.
-
-#### Create a new profile
-
-Drop a new file into `profiles/`:
-
-```sh
-cat > profiles/research.json <<'EOF'
-{
-  "name": "research",
-  "description": "Skills for reading papers and exploring code.",
-  "sources": [
-    { "source": "NETCASE/coretex", "scope": "global" }
-  ]
-}
-EOF
-coretex install research
-```
-
-The picker (`coretex install` without an argument) finds it automatically.
-
-#### Adopt manually-installed skills into coretex
-
-If a skill is already present (`coretex status` shows it as `ext`) and you want coretex to track it, add its source to a profile and run `coretex install <profile>`. The post-install snapshot picks the skill up, writes it to the manifest, and marks it as `adopt`. See [The BY column](#the-by-column) for the difference between `adopt` and `coretex`.
-
-#### Re-install after removing a skill manually
-
-```sh
-npx skills remove skill-creator -g -y     # removed manually
-coretex install system                    # re-installs it; manifest is unchanged
-```
-
-#### Refresh all installed skills to the latest upstream
-
-```sh
-npx skills update                  # global + project, all agents
-```
-
-This doesn't touch the manifest — the entries are still valid, only the on-disk content gets refreshed.
-
-#### Tell coretex-managed apart from external skills
-
-```sh
-coretex status
-```
-
-The **`BY`** column shows the state for every row — see [The BY column](#the-by-column) for the three values and what they mean.
-
-You can also inspect the manifests directly:
-
-```sh
-jq '.skills | keys' ~/.coretex/manifest.json     # global
-jq '.skills | keys' ./.coretex.json              # current project
-```
-
-#### Share a project's skill setup with collaborators
-
-Commit `.coretex.json` and the profile you used. Collaborators run `coretex install <profile>` in the project root and end up with the same skills installed under `./.claude/skills/`, plus the same manifest.
-
-### Troubleshooting
-
-| Symptom | Cause / fix |
+| Symptom | Fix |
 |---|---|
-| `jq not found` | `brew install jq` (macOS) — required for install.sh and `coretex status`. |
-| `Invalid JSON in profiles/<name>.json` | The profile is malformed. `jq . profiles/<name>.json` will point at the bad line. |
-| `unrecognized source format: 'X'` | `source` is malformed. Valid: `owner/name`, full URL (`https://…`, `git@…`), or local path (`./…`, `~/…`, `/abs/…`). |
-| `source 'foo/bar/baz' looks like a path — prefix with ./ for local sources` | Strings with extra slashes are ambiguous. Prefix with `./` if you meant a local path. |
-| `local source path does not exist` | The path doesn't exist or isn't a directory. Try an absolute path or check the spelling. |
-| `Your branch and 'origin/main' have diverged` (when running git pull on coretex itself) | Unrelated to coretex usage — that's the repo containing this README. `git pull --rebase` or `git fetch && git reset --hard origin/main` if you don't care about local commits. |
-| A skill is missing after install | Check the `skills add` output for upstream errors (network, repo not found, no SKILL.md). Skipped skills aren't written to the manifest. |
-| `fatal: Authentication failed` (HTTPS) | For private repos: configure a credential helper (`git config --global credential.helper osxkeychain` on macOS) and use an app password / personal access token instead of your account password. |
-| `Permission denied (publickey)` (SSH) | Add your public key to the Git host (Bitbucket/GitLab/GitHub settings), load the private key into ssh-agent (`ssh-add ~/.ssh/id_ed25519`), and verify with `ssh -T git@<host>`. |
-| `coretex status` shows a skill as `ext` you thought was tracked | The skill is on disk but not in the manifest — either the install failed silently or it was installed outside coretex. Re-run `coretex install <profile>` to adopt it. |
+| `jq not found` | `brew install jq` |
+| `Invalid JSON in profiles/<name>.json` | Run `jq . profiles/<name>.json` to find the bad line |
+| `unrecognized source format` | Check format — `owner/name`, full URL, or path with `./`/`~/`/`/` prefix |
+| `fatal: Authentication failed` (HTTPS) | Configure `git config --global credential.helper osxkeychain` and use an app password / PAT |
+| `Permission denied (publickey)` (SSH) | Add your key to the host, `ssh-add ~/.ssh/id_ed25519`, test with `ssh -T git@<host>` |
+| Skill shows as `ext` in status | Not in the manifest — it was installed outside coretex. Re-run `coretex install <profile>` to adopt it. |
 
-## Flow at a glance
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│  GitHub: NETCASE/coretex                                     │
-│  ├── skills/         ← published skills (role 1)             │
-│  ├── profiles/       ← curated bundles (role 2)              │
-│  └── scripts/        ← installer (role 2)                    │
-└──────────────────────────────────────────────────────────────┘
-                            │
-            ┌───────────────┴────────────────┐
-            ▼                                ▼
-   role 1: install              role 2: clone + run installer
-   npx skills add               git clone + bash scripts/install.sh
-            │                                │
-            ▼                                ▼
-   ~/.agents/skills/<name>/     profile decides scope per source:
-   + symlinks into every        global  → ~/.agents/skills/ + symlinks
-   detected agent dir                       into every detected agent
-                                project → ./.claude/skills/ (CWD)
-```
+See [TECH.md](TECH.md) for more on what coretex tracks, how `BY` is computed, and edge cases.
 
 ## Available skills
 
@@ -406,34 +130,10 @@ Commit `.coretex.json` and the profile you used. Collaborators run `coretex inst
 - **[skill-publish](skills/skill-publish/)** — Publish a local Agent Skill folder to the NETCASE/coretex GitHub repository so it becomes installable via `npx skills add NETCASE/coretex`.
 <!-- skills:end -->
 
-## Adding a new skill
+### Adding a new skill
 
-1. Create the skill folder under `skills/<name>/` with a valid `SKILL.md` (see [agentskills.io/specification](https://agentskills.io/specification)).
+1. Create `skills/<name>/SKILL.md` ([spec](https://agentskills.io/specification)).
 2. Use the [skill-publish](skills/skill-publish/) skill — it validates, commits, pushes, and verifies installation.
-
-## Format
-
-Every skill follows the open [Agent Skills specification](https://agentskills.io/specification):
-
-```
-skills/my-skill/
-├── SKILL.md          # required: YAML frontmatter (name, description) + instructions
-├── scripts/          # optional: executable helpers
-├── references/       # optional: docs the agent can load on demand
-└── assets/           # optional: templates, fixtures
-```
-
-## Repository layout
-
-```
-coretex/
-├── skills/           # published skills (one folder per skill)
-├── profiles/         # installable bundles: system.json, dev.json, web-design.json, thinktank.json
-├── scripts/
-│   ├── coretex.sh    # CLI dispatcher — the `coretex` alias points here (install / status)
-│   └── install.sh    # the actual installer: bash scripts/install.sh <profile>
-└── README.md
-```
 
 ## License
 
