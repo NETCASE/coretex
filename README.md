@@ -7,7 +7,7 @@ Two roles in one repo:
 1. **Skill source** — `skills/` contains the skills NETCASE publishes. Install them anywhere with `npx skills add NETCASE/coretex`. No clone needed.
 2. **Installer** — `profiles/` + `scripts/` is YOUR machine setup. It pulls curated bundles (NETCASE + upstream) into the right scope on each machine. Requires cloning the repo.
 
-For implementation details, code references, and how to extend `coretex`, see **[TECH.md](TECH.md)**.
+For implementation details, code references, and how to extend `coretex`, see **[ARCHITECTURE.md](ARCHITECTURE.md)**.
 
 ## Install
 
@@ -121,7 +121,7 @@ Commit `.coretex.json` and the profile. Collaborators run `coretex install <prof
 | `Permission denied (publickey)` (SSH) | Add your key to the host, `ssh-add ~/.ssh/id_ed25519`, test with `ssh -T git@<host>` |
 | Skill shows as `ext` in status | Not in the manifest — it was installed outside coretex. Re-run `coretex install <profile>` to adopt it. |
 
-See [TECH.md](TECH.md) for more on what coretex tracks, how `BY` is computed, and edge cases.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for more on what coretex tracks, how `BY` is computed, and edge cases.
 
 ## Available skills
 

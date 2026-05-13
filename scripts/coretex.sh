@@ -4,108 +4,43 @@
 # Usage:
 #   coretex install [<profile>]   install all sources in profiles/<profile>.json
 #                                 (no argument → pick from a list)
-#   coretex status                list installed skills, with coretex-managed
-#                                 vs. external markers
+#   coretex status                list installed skills (BY: coretex / adopt / ext)
 #   coretex detect-agents         agents auto-detect would target
 #   coretex update                update all installed skills   (coming soon)
 #   coretex remove                remove installed skills        (coming soon)
 #   coretex --help
 #
-# `install` is a thin wrapper around scripts/install.sh.
-# `status` needs `jq` (preinstalled on macOS at /usr/bin/jq).
+# Architecture: this is the single entry point. Worker code lives in lib/.
+# See ARCHITECTURE.md for the code map and design notes.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INSTALL_SH="$SCRIPT_DIR/install.sh"
-PROFILES_DIR="$(dirname "$SCRIPT_DIR")/profiles"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+PROFILES_DIR="$REPO_ROOT/profiles"
+LIB_DIR="$SCRIPT_DIR/lib"
 
-# ── style ────────────────────────────────────────────────────────
-if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
-  BOLD=$'\033[1m'; DIM=$'\033[2m'
-  TEAL=$'\033[38;2;70;210;192m'   # #46d2c0
-  RESET=$'\033[0m'
-else
-  BOLD='' DIM='' TEAL='' RESET=''
-fi
-
-RULE_W=76
-_hr() {  # dim horizontal rule, 2-space indent; arg = width (default $RULE_W)
-  local w="${1:-$RULE_W}"
-  printf '  %s%s%s\n' "$DIM" "$(printf '%*s' "$w" '' | tr ' ' '─')" "$RESET"
-}
-
-# ASCII-art wordmark — figlet "ANSI Shadow", "CORETEX" (box-drawing glyphs, no shell-special chars).
-COTX_BANNER=" ██████╗ ██████╗ ██████╗ ███████╗████████╗███████╗██╗  ██╗
-██╔════╝██╔═══██╗██╔══██╗██╔════╝╚══██╔══╝██╔════╝╚██╗██╔╝
-██║     ██║   ██║██████╔╝█████╗     ██║   █████╗   ╚███╔╝
-██║     ██║   ██║██╔══██╗██╔══╝     ██║   ██╔══╝   ██╔██╗
-╚██████╗╚██████╔╝██║  ██║███████╗   ██║   ███████╗██╔╝ ██╗
- ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝"
-
-coretex_version() {  # <branch>@<short-sha>, or "?" if not a git repo
-  local branch sha
-  branch="$(git -C "$SCRIPT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null)" || { echo "?"; return; }
-  sha="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null)" || { echo "?"; return; }
-  echo "${branch}@${sha}"
-}
-
-human_size() {  # KB -> "N KB" / "N.N MB" / "N.NN GB"
-  awk -v kb="${1:-0}" 'BEGIN {
-    if (kb < 1024)        printf "%d KB\n",   kb
-    else if (kb < 1048576) printf "%.1f MB\n", kb/1024
-    else                   printf "%.2f GB\n", kb/1048576
-  }'
-}
-
-total_skill_size() {  # sum of skill dirs that exist, humanised
-  local total=0 d kb
-  for d in "$HOME/.agents/skills" "./skills" "./.claude/skills"; do
-    [[ -d "$d" ]] || continue
-    kb="$(du -sk "$d" 2>/dev/null | awk '{print $1}')"
-    if [[ -n "$kb" ]]; then total=$((total + kb)); fi
-  done
-  human_size "$total"
-}
-
-print_header() {  # arg = command name
-  local cmd="$1" banner
-  banner="$(printf '%s\n' "$COTX_BANNER" | sed 's/^/  /')"
-  echo
-  _hr
-  echo
-  printf '%s%s%s\n' "$TEAL" "$banner" "$RESET"
-  echo
-  _hr
-  printf '  %scommand:%s %s%s%s\n' "$DIM" "$RESET" "$BOLD" "$cmd" "$RESET"
-  _hr
-  echo
-}
-
-print_footer() {
-  echo
-  _hr
-  printf '  %scoretex%s %s· %s · %s · %s%s\n' \
-    "$TEAL" "$RESET" "$DIM" "$(coretex_version)" "$(total_skill_size)" "$(date +%Y-%m-%d)" "$RESET"
-  _hr
-  echo
-  echo
-}
+. "$LIB_DIR/style.sh"
+. "$LIB_DIR/manifest.sh"
+. "$LIB_DIR/source.sh"
 
 # ── shared helpers ───────────────────────────────────────────────
 list_profiles() {
   ls "$PROFILES_DIR"/*.json 2>/dev/null | xargs -n1 basename 2>/dev/null | sed 's/\.json$//'
 }
 
-# Manifest paths — kept in sync with install.sh.
-GLOBAL_MANIFEST="$HOME/.coretex/manifest.json"
-project_manifest_for() { echo "$1/.coretex.json"; }
+need_jq() {
+  command -v jq >/dev/null 2>&1 || {
+    echo "coretex needs 'jq' — install with: brew install jq" >&2
+    exit 1
+  }
+}
 
-# Read manifest at $1 (defaults to empty manifest if missing) and emit the
-# skills object. Pipe to jq downstream.
-read_manifest() {
-  local path="$1"
-  if [[ -f "$path" ]]; then jq -c '.skills // {}' "$path"; else echo '{}'; fi
+need_npx() {
+  command -v npx >/dev/null 2>&1 || {
+    echo "coretex needs 'npx' — install Node.js (https://nodejs.org) first." >&2
+    exit 1
+  }
 }
 
 usage() {
@@ -151,89 +86,154 @@ pick_profile() {
   echo "${profiles[$((choice - 1))]}"
 }
 
+# install_one_source <src_json> <profile_name>
+#
+# Process one entry from a profile's `sources` array. Resolves the source,
+# invokes `skills add`, snapshots before/after, and writes manifest entries
+# for the skills that the operation actually put on disk.
+install_one_source() {
+  local src="$1" profile="$2"
+  local scope provider source_str resolved_line
+  local skills_json agents_json scope_flag
+  local before after manifest
+  local skill_args agent_args desc tracked names_to_track
+  local before_names_json name actual_agents was_before
+
+  scope="$(jq -r '.scope // "global"' <<<"$src")"
+  case "$scope" in
+    global|project) ;;
+    *) echo "  ! Unknown scope '$scope' — skipping: $src" >&2; return ;;
+  esac
+
+  # Provider → effective source string passed to `skills add`.
+  resolved_line="$(resolve_source "$src")" || return
+  provider="${resolved_line%%	*}"
+  source_str="${resolved_line#*	}"
+
+  skills_json="$(jq -c '.skills // []' <<<"$src")"
+  agents_json="$(jq -c '.agents // []' <<<"$src")"
+
+  scope_flag=""
+  [[ "$scope" == "global" ]] && scope_flag="-g"
+
+  # Build skill / agent CLI arg arrays.
+  # `--skill` and `-a` are variadic → put `--skill` LAST so it can't swallow
+  # other flags; `-a` must come BEFORE `--skill` so it stops at the boundary.
+  skill_args=()
+  agent_args=()
+  if [[ "$(jq 'length' <<<"$skills_json")" -gt 0 ]]; then
+    skill_args=(--skill)
+    while IFS= read -r s; do skill_args+=("$s"); done < <(jq -r '.[]' <<<"$skills_json")
+  fi
+  if [[ "$(jq 'length' <<<"$agents_json")" -gt 0 ]]; then
+    agent_args=(-a)
+    while IFS= read -r a; do agent_args+=("$a"); done < <(jq -r '.[]' <<<"$agents_json")
+  elif [[ -n "${CORETEX_AGENTS:-}" ]]; then
+    agent_args=(-a)
+    IFS=',' read -ra _a <<<"$CORETEX_AGENTS"
+    for a in "${_a[@]}"; do agent_args+=("$a"); done
+  fi
+
+  desc=" [$provider]"
+  [[ ${#skill_args[@]} -gt 0 ]] && desc+=" [skills: $(jq -r 'join(", ")' <<<"$skills_json")]"
+  if [[ ${#agent_args[@]} -gt 0 ]]; then
+    if [[ "$(jq 'length' <<<"$agents_json")" -gt 0 ]]; then
+      desc+=" [agents: $(jq -r 'join(", ")' <<<"$agents_json")]"
+    else
+      desc+=" [agents: ${CORETEX_AGENTS}]"
+    fi
+  fi
+  echo "→ $source_str ($scope)$desc"
+
+  before="$(snapshot_for_scope "$scope")"
+
+  # </dev/null prevents npx from consuming the profile file via stdin.
+  npx -y skills add "$source_str" $scope_flag -y \
+    ${agent_args[@]+"${agent_args[@]}"} \
+    ${skill_args[@]+"${skill_args[@]}"} </dev/null
+
+  after="$(snapshot_for_scope "$scope")"
+
+  manifest="$(manifest_path_for "$scope")"
+  manifest_init "$manifest"
+
+  # Decide which skill names to track in the manifest.
+  # 1. Explicit `skills` list → track exactly those.
+  # 2. Whole repo → diff after - before = new skills. If nothing new (re-run),
+  #    fall back to all skills present after.
+  names_to_track=()
+  if [[ "$(jq 'length' <<<"$skills_json")" -gt 0 ]]; then
+    while IFS= read -r n; do names_to_track+=("$n"); done < <(jq -r '.[]' <<<"$skills_json")
+  else
+    while IFS= read -r n; do names_to_track+=("$n"); done < <(
+      jq -r --argjson b "$before" --argjson a "$after" \
+        '([$a[].name] - [$b[].name]) | .[]' <<<null
+    )
+    if [[ ${#names_to_track[@]} -eq 0 ]]; then
+      while IFS= read -r n; do names_to_track+=("$n"); done < <(jq -r '.[].name' <<<"$after")
+    fi
+  fi
+
+  before_names_json="$(jq '[.[].name]' <<<"$before")"
+  tracked=0
+  for name in "${names_to_track[@]}"; do
+    [[ -z "$name" ]] && continue
+    actual_agents="$(jq -c --arg n "$name" \
+      'map(select(.name == $n)) | (.[0].agents // [])' <<<"$after")"
+    # If the skill isn't in `after`, the install failed — skip the manifest entry.
+    if [[ -z "$actual_agents" || "$actual_agents" == "null" ]] || \
+       [[ "$(jq --arg n "$name" 'any(.name == $n)' <<<"$after")" != "true" ]]; then
+      continue
+    fi
+    was_before="$(jq --arg n "$name" 'index($n) != null' <<<"$before_names_json")"
+    manifest_upsert "$manifest" "$name" "$provider" "$source_str" "$scope" "$profile" "$actual_agents" "$was_before"
+    tracked=$((tracked + 1))
+  done
+
+  echo "  tracked $tracked skill(s) in $(echo "$manifest" | sed "s|^$HOME|~|")"
+  echo
+}
+
 cmd_install() {
+  need_jq
+  need_npx
   print_header "install"
   local profile="${1:-}"
   if [[ -z "$profile" ]]; then
     profile="$(pick_profile)"
   fi
-  if [[ ! -f "$PROFILES_DIR/$profile.json" ]]; then
+  local profile_file="$PROFILES_DIR/$profile.json"
+  if [[ ! -f "$profile_file" ]]; then
     echo "no such profile: $profile  (have: $(list_profiles | paste -sd' ' -))" >&2
     exit 1
   fi
-  bash "$INSTALL_SH" "$profile"
+  jq -e . "$profile_file" >/dev/null || {
+    echo "Invalid JSON in $profile_file" >&2
+    exit 1
+  }
+
+  echo "Installing skills from profile: $profile"
+  echo "Source: $profile_file"
+  echo
+
+  local count=0
+  while IFS= read -r src; do
+    [[ -z "$src" ]] && continue
+    install_one_source "$src" "$profile"
+    count=$((count + 1))
+  done < <(jq -c '.sources[]' "$profile_file")
+
+  if [[ $count -eq 0 ]]; then
+    echo "No sources in profile '$profile'."
+  else
+    echo "✓ Processed $count source(s) from profile '$profile'."
+    echo "  Run 'coretex status' to see installed skills."
+  fi
+
   print_footer
 }
 
 # ── status ───────────────────────────────────────────────────────
-need_jq() {
-  command -v jq >/dev/null 2>&1 || {
-    echo "coretex status needs 'jq' — install with: brew install jq" >&2
-    exit 1
-  }
-}
-
-# Read TSV from stdin (first line = header), print an indented, aligned
-# table with a rule under the header spanning the widest row.
-fmt_table() {
-  local formatted maxw rule
-  formatted="$(column -t -s$'\t')"
-  [[ -z "$formatted" ]] && { echo "  (none)"; return; }
-  # Rule spans the widest row, but never narrower than the header/footer rule.
-  maxw="$(printf '%s\n' "$formatted" | awk -v min="$RULE_W" '{ if (length > m) m = length } END { print (m > min ? m : min) + 0 }')"
-  rule="$(printf '%*s' "$maxw" '' | tr ' ' '─')"
-  { printf '%s\n' "$formatted" | head -1; printf '%s\n' "$rule"; printf '%s\n' "$formatted" | tail -n +2; } | sed 's/^/  /'
-}
-
-# Style the NAME column of a fmt_table block: colour it teal, and blank it on
-# consecutive rows that repeat the previous row's name (so a skill with several
-# agent rows shows the name once). NR<=2 = header + rule rows, left untouched.
-style_name_column() {
-  awk -v t="$TEAL" -v r="$RESET" '
-    NR<=2 { print; prev=""; next }
-    {
-      ws = ""; line = $0
-      if (match(line, /^[[:space:]]+/)) { ws = substr(line, 1, RLENGTH); line = substr(line, RLENGTH+1) }
-      if (match(line, /^[^[:space:]]+/)) {
-        name = substr(line, 1, RLENGTH); rest = substr(line, RLENGTH+1)
-        if (name == prev) {
-          pad = ""; n = length(ws) + length(name)
-          for (i=0; i<n; i++) pad = pad " "
-          print pad rest
-        } else { prev = name; print ws t name r rest }
-      } else { print $0 }
-    }'
-}
-
-# Colour the BY column (always column 2 after style_name_column): coretex/adopt
-# in teal, ext in dim. NR<=2 = header + rule, untouched.
-style_by_column() {
-  awk -v t="$TEAL" -v d="$DIM" -v r="$RESET" '
-    NR<=2 { print; next }
-    {
-      # Walk fields by character to preserve the column padding produced by `column -t`.
-      # Approach: capture leading whitespace, then 1st token (NAME — possibly blank
-      # for repeated-name rows), its padding, then 2nd token (BY), then rest.
-      line = $0
-      out = ""
-      # leading ws (indent)
-      if (match(line, /^[[:space:]]+/)) { out = substr(line,1,RLENGTH); line = substr(line,RLENGTH+1) }
-      # name token (may be empty if this row has only spaces in column 1)
-      if (match(line, /^[^[:space:]]+/)) {
-        out = out substr(line,1,RLENGTH); line = substr(line,RLENGTH+1)
-      }
-      # whitespace between name and BY
-      if (match(line, /^[[:space:]]+/)) { out = out substr(line,1,RLENGTH); line = substr(line,RLENGTH+1) }
-      # the BY token
-      if (match(line, /^[^[:space:]]+/)) {
-        by = substr(line,1,RLENGTH); line = substr(line,RLENGTH+1)
-        if (by == "coretex" || by == "adopt") out = out t by r
-        else if (by == "ext")                 out = out d by r
-        else                                  out = out by
-      }
-      print out line
-    }'
-}
 
 # Display-name → home-relative dir for the per-agent symlink locations.
 AGENT_LINK_DIRS='{
@@ -262,8 +262,8 @@ print_global() {
   manifest="$(read_manifest "$GLOBAL_MANIFEST")"
   {
     printf 'NAME\tBY\tAGENT\tPATH\n'
-    # One row per (skill, agent). PATH is the agent's symlink path; falls back to
-    # the canonical store path when the agent's dir isn't in AGENT_LINK_DIRS.
+    # One row per (skill, agent). PATH is the agent's symlink path; falls back
+    # to the canonical store path when the agent's dir isn't in AGENT_LINK_DIRS.
     # BY column: coretex / adopt / ext, computed against the global manifest.
     echo "$json" | jq -r \
       --argjson m "$AGENT_LINK_DIRS" \
@@ -282,19 +282,16 @@ print_global() {
   } | fmt_table | style_name_column | style_by_column
 }
 
-# Project skills, grouped by the folder that contains them.
-# Excludes the canonical store (~/.agents/skills/) and per-agent dirs (~/.<agent>/skills/),
+# Project skills, grouped by the folder that contains them. Excludes the
+# canonical store (~/.agents/skills/) and per-agent dirs (~/.<agent>/skills/),
 # which belong to the "Globally installed" section.
 print_folders() {
   local json rows
   json="$(npx -y skills list --json 2>/dev/null || echo '[]')"
-  # Per-skill row: project_root, skill_name, agents_str, rel_path.
-  # The manifest lives at <project_root>/.coretex.json — we resolve BY per
-  # project root below, after grouping.
   rows="$(echo "$json" | jq -r --arg home "$HOME" '
     .[]
     | (.path | ltrimstr($home + "/")) as $rest
-    | select(($rest | test("^\\.[^/]+/skills/")) | not)         # drop ~/.<agent>/skills/ installs
+    | select(($rest | test("^\\.[^/]+/skills/")) | not)
     | select(.path | test("/(?:\\.claude/)?skills/[^/]+$"))
     | (.path | capture("(?<root>.*?)/(?<rel>(?:\\.claude/)?skills/[^/]+)$")) as $m
     | [ $m.root,
